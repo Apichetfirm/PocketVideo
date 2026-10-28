@@ -18,14 +18,15 @@ import sys
 import urllib.request
 import zipfile
 
-PINNED_FFMPEG_VERSION = "n7.1-latest-win64-gpl-7.1"
+PINNED_FFMPEG_VERSION = "N-128121-g86444dd368-win64-gpl"
 PINNED_FFMPEG_URL = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
-    "autobuild-2024-11-30-12-53/ffmpeg-n7.1-26-g269252c9a6-win64-gpl-7.1.zip"
+    "autobuild-2026-10-27-18-38/ffmpeg-N-128121-g86444dd368-win64-gpl.zip"
 )
-# Pinned SHA-256 digest of the official BtbN GPL 7.1 Windows x64 archive
+# Official GitHub release asset ID 682510708, digest from the BtbN release API.
+# This is a pinned, static GPL Windows x64 build (not a moving "latest" URL).
 PINNED_FFMPEG_SHA256 = (
-    "e02f3f0614f5ef46c8a866a789b0363f22b494ef474712648f206f889242793c"
+    "1eb70a550388567bc2abbb2d164814f722f36a034fd927dcdfb217bc7e94930c"
 )
 
 

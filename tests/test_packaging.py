@@ -74,6 +74,22 @@ class WindowsPackagingTestSuite(unittest.TestCase):
         self.assertIn("PocketVideo-Setup-", iss_content)
         self.assertIn("ArchitecturesInstallIn64BitMode=x64compatible", iss_content)
 
+    def test_03_windows_ffmpeg_download_is_pinned_to_audited_release_asset(self) -> None:
+        """Prevent republishing the stale 404 asset or an unaudited digest.
+
+        Asset URL and SHA-256 are from the BtbN GitHub release asset metadata
+        (autobuild-2026-10-27-18-38, asset ID 682510708).
+        """
+        self.assertEqual(
+            _fetch_mod.PINNED_FFMPEG_URL,
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
+            "autobuild-2026-10-27-18-38/ffmpeg-N-128121-g86444dd368-win64-gpl.zip",
+        )
+        self.assertEqual(
+            _fetch_mod.PINNED_FFMPEG_SHA256,
+            "1eb70a550388567bc2abbb2d164814f722f36a034fd927dcdfb217bc7e94930c",
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
