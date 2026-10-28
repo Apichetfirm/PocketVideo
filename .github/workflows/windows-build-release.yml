@@ -65,12 +65,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          .\dist\PocketVideo\PocketVideo.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "Packaged executable failed version check." }
+          # PocketVideo is a windowed (console=False) executable: PowerShell can
+          # return before a GUI process exits. Wait for the actual process and
+          # inspect its ExitCode, not the possibly stale $LASTEXITCODE.
+          $PocketVideoExe = (Resolve-Path '.\dist\PocketVideo\PocketVideo.exe').Path
+          $VersionRun = Start-Process -FilePath $PocketVideoExe -ArgumentList '--version' -Wait -PassThru
+          if ($VersionRun.ExitCode -ne 0) { throw "Packaged executable failed version check: $($VersionRun.ExitCode)" }
           .\dist\PocketVideo\bin\ffmpeg.exe -hide_banner -y -f lavfi -i testsrc2=size=640x360:rate=30:duration=2 -f lavfi -i sine=frequency=440:duration=2 -c:v libx264 -b:v 1500k -c:a aac .\dist\ci_smoke_input.mp4
           if ($LASTEXITCODE -ne 0) { throw "Bundled FFmpeg failed to create a smoke-test video." }
-          .\dist\PocketVideo\PocketVideo.exe --cli-compress .\dist\ci_smoke_input.mp4 --output-dir .\dist\ci_smoke_out
-          if ($LASTEXITCODE -ne 0) { throw "Packaged PocketVideo compression failed." }
+          $CompressionRun = Start-Process -FilePath $PocketVideoExe -ArgumentList @('--cli-compress', '.\dist\ci_smoke_input.mp4', '--output-dir', '.\dist\ci_smoke_out') -Wait -PassThru
+          if ($CompressionRun.ExitCode -ne 0) { throw "Packaged PocketVideo compression failed: $($CompressionRun.ExitCode)" }
           $Output = Get-ChildItem .\dist\ci_smoke_out -Filter '*.mp4' | Select-Object -First 1
           if (-not $Output -or $Output.Length -le 0) { throw "No valid output file from packaged executable." }
           .\dist\PocketVideo\bin\ffprobe.exe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $Output.FullName

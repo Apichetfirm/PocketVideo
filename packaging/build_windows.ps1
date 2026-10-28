@@ -15,8 +15,8 @@ Write-Host "=== [3/6] Building Standalone Windows Application with PyInstaller =
 pyinstaller --noconfirm --clean packaging/pocketvideo.spec
 
 Write-Host "=== [4/6] Running Post-Build Executable Verification ==="
-& "$RepoRoot\dist\PocketVideo\PocketVideo.exe" --version
-if ($LASTEXITCODE -ne 0) { throw "Built PocketVideo.exe failed its version smoke test." }
+$VersionRun = Start-Process -FilePath "$RepoRoot\dist\PocketVideo\PocketVideo.exe" -ArgumentList '--version' -Wait -PassThru
+if ($VersionRun.ExitCode -ne 0) { throw "Built PocketVideo.exe failed its version smoke test: $($VersionRun.ExitCode)" }
 
 Write-Host "=== [5/6] Creating Portable ZIP Distribution ==="
 New-Item -ItemType Directory -Force -Path "$RepoRoot\dist\release" | Out-Null
