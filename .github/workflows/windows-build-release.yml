@@ -1,0 +1,143 @@
+name: Windows Build, Test & Release
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags: [ "v*.*.*" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-x64:
+    name: Build & Verify PocketVideo (Windows x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Fetch & Cryptographically Verify Redistributable FFmpeg/FFprobe (SHA-256)
+        run: |
+          python packaging/fetch_ffmpeg_windows.py
+
+      - name: Run Automated Test Suite (Media, Presets, 2-Pass, Queue, Job Object, Packaging)
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src;${{ github.workspace }}
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          pytest -v
+
+      - name: Capture Native PySide6 Application Screenshots
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python scripts/capture_screenshots.py
+
+      - name: Upload Native Qt Screenshots for Review
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketVideo-Native-Windows-UI-Screenshots
+          path: docs/screenshots/*.png
+          if-no-files-found: error
+
+      - name: Build Standalone Windows Executable with PyInstaller
+        run: |
+          pyinstaller --noconfirm --clean packaging/pocketvideo.spec
+
+      - name: Smoke-Test Built Windows Executable (CLI Compression & Version Check)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\dist\PocketVideo\PocketVideo.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged executable failed version check." }
+          .\dist\PocketVideo\bin\ffmpeg.exe -hide_banner -y -f lavfi -i testsrc2=size=640x360:rate=30:duration=2 -f lavfi -i sine=frequency=440:duration=2 -c:v libx264 -b:v 1500k -c:a aac .\dist\ci_smoke_input.mp4
+          if ($LASTEXITCODE -ne 0) { throw "Bundled FFmpeg failed to create a smoke-test video." }
+          .\dist\PocketVideo\PocketVideo.exe --cli-compress .\dist\ci_smoke_input.mp4 --output-dir .\dist\ci_smoke_out
+          if ($LASTEXITCODE -ne 0) { throw "Packaged PocketVideo compression failed." }
+          $Output = Get-ChildItem .\dist\ci_smoke_out -Filter '*.mp4' | Select-Object -First 1
+          if (-not $Output -or $Output.Length -le 0) { throw "No valid output file from packaged executable." }
+          .\dist\PocketVideo\bin\ffprobe.exe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $Output.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Bundled FFprobe could not inspect the compressed video." }
+
+      - name: Ensure Inno Setup 6 Compiler Is Available
+        shell: pwsh
+        run: |
+          $Iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          $Candidate = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not $Iscc -and -not (Test-Path $Candidate)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed." }
+          }
+          if (Test-Path $Candidate) {
+            (Split-Path $Candidate -Parent) | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } elseif (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            throw "Inno Setup compiler is not available."
+          }
+
+      - name: Package Portable ZIP & Compile Inno Setup Installer (.exe)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "dist/release" | Out-Null
+          Compress-Archive -Path "dist/PocketVideo/*" -DestinationPath "dist/release/PocketVideo-1.0.0-win64-portable.zip" -Force
+          iscc "packaging/installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup packaging failed." }
+          Copy-Item "dist/installer/PocketVideo-Setup-1.0.0-win64.exe" "dist/release/" -Force
+          Copy-Item "LICENSE" "dist/release/LICENSE.txt" -Force
+          Copy-Item "THIRD_PARTY_NOTICES.md" "dist/release/THIRD_PARTY_NOTICES.md" -Force
+          foreach ($Package in @('dist/release/PocketVideo-Setup-1.0.0-win64.exe', 'dist/release/PocketVideo-1.0.0-win64-portable.zip')) {
+            if (-not (Test-Path $Package)) { throw "Required release package is missing: $Package" }
+            if ((Get-Item $Package).Length -le 0) { throw "Release package is empty: $Package" }
+          }
+
+      - name: Generate SHA-256 Checksums
+        shell: pwsh
+        run: |
+          $ChecksumFile = "dist/release/SHA256SUMS.txt"
+          Get-ChildItem "dist/release/*" -Exclude "SHA256SUMS.txt" | ForEach-Object {
+            $Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$Hash  $($_.Name)"
+          } | Set-Content -Path $ChecksumFile -Encoding UTF8
+          Get-Content $ChecksumFile
+
+      - name: Upload Windows Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketVideo-Windows-x64-Packages
+          path: |
+            dist/release/PocketVideo-Setup-1.0.0-win64.exe
+            dist/release/PocketVideo-1.0.0-win64-portable.zip
+            dist/release/SHA256SUMS.txt
+            dist/release/LICENSE.txt
+            dist/release/THIRD_PARTY_NOTICES.md
+
+      - name: Publish Versioned GitHub Release (on Tag Push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/release/PocketVideo-Setup-1.0.0-win64.exe
+            dist/release/PocketVideo-1.0.0-win64-portable.zip
+            dist/release/SHA256SUMS.txt
+            dist/release/LICENSE.txt
+            dist/release/THIRD_PARTY_NOTICES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
