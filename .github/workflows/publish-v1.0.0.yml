@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   publish:
-    if: github.repository == 'Apichetfirm/PocketVideo' && github.event.head_commit.message == 'release: publish PocketVideo v1.0.0 from verified build'
+    if: >-
+      github.repository == 'Apichetfirm/PocketVideo' && github.event.head_commit.message == 'release: publish PocketVideo v1.0.0 from verified build (workflow syntax fix)'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout release notes
