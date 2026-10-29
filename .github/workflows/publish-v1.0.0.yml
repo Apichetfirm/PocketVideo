@@ -1,0 +1,59 @@
+name: Publish PocketVideo v1.0.0 (verified artifacts)
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/publish-v1.0.0.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'Apichetfirm/PocketVideo' && github.event.head_commit.message == 'release: publish PocketVideo v1.0.0 from verified build'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
+      - name: Download verified Windows packages from successful CI run
+        uses: actions/download-artifact@v4
+        with:
+          name: PocketVideo-Windows-x64-Packages
+          repository: Apichetfirm/PocketVideo
+          run-id: 40721952341
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: release
+
+      - name: Verify package completeness and cryptographic checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release/PocketVideo-Setup-1.0.0-win64.exe
+          test -s release/PocketVideo-1.0.0-win64-portable.zip
+          test -s release/SHA256SUMS.txt
+          test -s release/LICENSE.txt
+          test -s release/THIRD_PARTY_NOTICES.md
+          (cd release && sha256sum -c SHA256SUMS.txt)
+          unzip -t release/PocketVideo-1.0.0-win64-portable.zip >/dev/null
+
+      - name: Publish public v1.0.0 GitHub Release with verified packages
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0
+          target_commitish: 976d8cf3163b98e0e754c3e778bbe5dbd3ba3927
+          name: PocketVideo v1.0.0
+          draft: false
+          prerelease: false
+          make_latest: true
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: true
+          files: |
+            release/PocketVideo-Setup-1.0.0-win64.exe
+            release/PocketVideo-1.0.0-win64-portable.zip
+            release/SHA256SUMS.txt
+            release/LICENSE.txt
+            release/THIRD_PARTY_NOTICES.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
