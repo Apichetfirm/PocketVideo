@@ -13,6 +13,7 @@ import time
 from typing import Callable, Optional
 
 from pocketvideo.core.models import (
+    OutputPolicy,
     EncodingJobSpec,
     JobProgress,
     JobResultComparison,
@@ -27,6 +28,13 @@ from pocketvideo.media.encoder import (
     cleanup_twopass_logs,
 )
 from pocketvideo.media.probe import inspect_media
+from pocketvideo.media.images import (
+    SUPPORTED_IMAGE_EXTENSIONS, inspect_image, encode_image,
+)
+from pocketvideo.core.output_safety import (
+    StorageDisconnectedError, confirm_source, ensure_storage,
+    promote_verified_output,
+)
 from pocketvideo.resources.job_object import (
     ProcessResourceController,
     resume_process,
@@ -50,7 +58,7 @@ SUPPORTED_VIDEO_EXTENSIONS = {
 
 
 def discover_videos_in_folder(folder: Path, recursive: bool = True) -> list[Path]:
-    """Scan a directory for supported video files, sorted by name."""
+    """Scan a directory for supported video AND still images, sorted by name."""
     if not folder.exists() or not folder.is_dir():
         return []
     iterator = folder.rglob("*") if recursive else folder.glob("*")
@@ -58,7 +66,7 @@ def discover_videos_in_folder(folder: Path, recursive: bool = True) -> list[Path
         p.resolve()
         for p in iterator
         if p.is_file()
-        and p.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS
+        and p.suffix.lower() in (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
         and not p.name.startswith(".pocketvideo_tmp_")
     ]
     return sorted(matches)
@@ -128,6 +136,7 @@ class QueueManager:
         self._max_concurrent: int = 1
         self._scheduler_thread: Optional[threading.Thread] = None
         self._shutdown: bool = False
+        self._storage_paused: bool = False
 
     def set_max_concurrent_jobs(self, count: int) -> None:
         with self._lock:
@@ -242,6 +251,9 @@ class QueueManager:
             self.cancel_job(jid)
 
     def retry_failed(self) -> int:
+        """Retry failed jobs after reconnecting missing source/destination disks."""
+        with self._lock:
+            self._storage_paused = False
         retried = 0
         with self._lock:
             for jid in self._order:
@@ -259,6 +271,9 @@ class QueueManager:
 
     def _dispatch_loop(self) -> None:
         while not self._shutdown:
+            if self._storage_paused:
+                logger.warning("Queue halted after storage disconnect; reconnect and retry manually.")
+                break
             next_item: Optional[QueueItem] = None
             with self._lock:
                 if self._active_workers < self._max_concurrent:
@@ -297,7 +312,21 @@ class QueueManager:
         try:
             self._notify_item(item)
             if item.input_metadata is None:
-                item.input_metadata = inspect_media(item.spec.input_path, self.binaries)
+                item.input_metadata = (
+                    inspect_image(item.spec.input_path)
+                    if item.spec.media_kind == "image"
+                    else inspect_media(item.spec.input_path, self.binaries)
+                )
+            confirm_source(item.spec.input_path, item.spec.source_fingerprint)
+            try:
+                ensure_storage(item.spec.input_path, item.spec.output_path.parent)
+            except StorageDisconnectedError:
+                self._storage_paused = True
+                raise
+
+            if item.spec.media_kind == "image":
+                self._process_image_job(item, started_monotonic)
+                return
 
             plan = build_encode_plan(
                 item.spec, item.input_metadata, self.binaries, self.work_dir
@@ -404,11 +433,22 @@ class QueueManager:
                     )
 
             plan.final_output_path.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(plan.temp_output_path, plan.final_output_path)
+            try:
+                actual_output_path, preserved_backup = promote_verified_output(
+                    plan.temp_output_path, plan.final_output_path,
+                    item.spec.input_path, item.spec.output_policy,
+                    item.spec.source_fingerprint,
+                )
+            except (OSError, StorageDisconnectedError):
+                if not item.spec.input_path.is_file() or not plan.final_output_path.parent.is_dir():
+                    self._storage_paused = True
+                raise
+            if preserved_backup:
+                item.warnings.append(f"Previous file safely backed up at: {preserved_backup}")
 
             elapsed_total = max(0.01, time.monotonic() - started_monotonic)
             orig_size = item.input_metadata.file_size_bytes
-            out_size = plan.final_output_path.stat().st_size
+            out_size = actual_output_path.stat().st_size
             saved_bytes = orig_size - out_size
             reduction_pct = ((orig_size - out_size) / max(1, orig_size)) * 100.0
 
@@ -418,7 +458,7 @@ class QueueManager:
             comparison = JobResultComparison(
                 job_id=job_id,
                 input_path=item.spec.input_path,
-                output_path=plan.final_output_path,
+                output_path=actual_output_path,
                 operation_mode=plan.effective_mode,
                 original_size_bytes=orig_size,
                 output_size_bytes=out_size,
@@ -445,6 +485,15 @@ class QueueManager:
             item.error_message = "Cancelled by user."
             self._notify_item(item)
         except Exception as exc:
+            if isinstance(exc, StorageDisconnectedError) or (
+                not item.spec.input_path.is_file() or
+                not item.spec.output_path.parent.is_dir()
+            ):
+                self._storage_paused = True
+                exc = StorageDisconnectedError(
+                    f"USB/HDD source or destination unavailable; reconnect drive and press Retry Failed. "
+                    f"Original files were not intentionally deleted. Details: {exc}"
+                )
             logger.exception("Job %s failed: %s", job_id, exc)
             item.status = JobStatus.FAILED
             item.error_message = str(exc)
@@ -462,6 +511,57 @@ class QueueManager:
                 self._processes.pop(job_id, None)
                 self._active_workers = max(0, self._active_workers - 1)
             self._notify_summary()
+
+    def _process_image_job(self, item: QueueItem, started_monotonic: float) -> None:
+        """Image work shares the exact same scheduler, queue and verification states."""
+        src = item.spec.input_path
+        dst = item.spec.output_path
+        staged = dst.with_name(f".pocketvideo_tmp_{item.spec.job_id}_{dst.name}")
+        item.status = JobStatus.PROCESSING
+        self._notify_item(item)
+        try:
+            width, height, warnings = encode_image(item.spec, staged)
+            item.status = JobStatus.VERIFYING
+            item.warnings = warnings
+            self._notify_item(item)
+            if item.spec.job_id in self._cancel_flags:
+                raise InterruptedError("Image conversion cancelled.")
+            actual, backup = promote_verified_output(
+                staged, dst, src, item.spec.output_policy,
+                item.spec.source_fingerprint,
+            )
+            if backup is not None:
+                item.warnings.append(f"Previous file safely backed up at: {backup}")
+            original_size = item.input_metadata.file_size_bytes if item.input_metadata else src.stat().st_size
+            new_size = actual.stat().st_size
+            result = JobResultComparison(
+                job_id=item.spec.job_id,
+                input_path=src,
+                output_path=actual,
+                operation_mode=item.spec.operation_mode,
+                original_size_bytes=original_size,
+                output_size_bytes=new_size,
+                space_saved_bytes=original_size - new_size,
+                reduction_percent=round((original_size - new_size) * 100 / max(1, original_size), 2),
+                original_resolution=f"{item.input_metadata.image_width}x{item.input_metadata.image_height}",
+                output_resolution=f"{width}x{height}",
+                original_codec=item.input_metadata.container_format,
+                output_codec=item.spec.target_container,
+                processing_duration_seconds=round(time.monotonic() - started_monotonic, 2),
+                warnings=list(item.warnings),
+            )
+            item.result = result
+            item.progress.percent = 100.0
+            item.status = JobStatus.COMPLETED
+            self._notify_item(item)
+            if self.on_job_completed:
+                self.on_job_completed(result)
+        finally:
+            try:
+                if staged.is_file():
+                    staged.unlink()
+            except OSError:
+                pass
 
     def _notify_item(self, item: QueueItem) -> None:
         if self.on_job_updated:

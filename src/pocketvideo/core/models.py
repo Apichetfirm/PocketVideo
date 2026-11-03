@@ -25,6 +25,28 @@ class CompatibilityMode(str, Enum):
     MAX_COMPATIBILITY = "max_compatibility"  # H.264 / AAC in MP4
 
 
+class OutputPolicy(str, Enum):
+    """Explicit collision strategy; destructive source replacement is always opt-in."""
+    KEEP_BOTH = "keep_both"
+    SKIP_EXISTING = "skip_existing"
+    REPLACE_OUTPUT = "replace_output"
+    REPLACE_SOURCE_BACKUP = "replace_source_backup"
+
+
+class AfterExportAction(str, Enum):
+    NONE = "none"
+    SLEEP = "sleep"
+    SHUTDOWN = "shutdown"
+
+
+class ImagePreset(str, Enum):
+    BEST_QUALITY = "best_quality"
+    BALANCED = "balanced"
+    SMALLEST = "smallest"
+    FASTEST = "fastest"
+    CUSTOM = "custom"
+
+
 class OperationMode(str, Enum):
     """Distinguishes compression, full transcoding, and lossless smart remux."""
     COMPRESS = "compress"
@@ -147,6 +169,9 @@ class MediaMetadata:
     efficiency_warning_key: Optional[str] = None
     hdr_warning_key: Optional[str] = None
     raw_tags: dict[str, str] = field(default_factory=dict)
+    media_kind: str = "video"
+    image_width: int = 0
+    image_height: int = 0
 
     @property
     def primary_video(self) -> Optional[VideoStreamInfo]:
@@ -236,6 +261,11 @@ class EncodingJobSpec:
     allow_smart_remux: bool = True
     advanced: AdvancedEncodingOptions = field(default_factory=AdvancedEncodingOptions)
     resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
+    media_kind: str = "video"
+    image_preset: ImagePreset = ImagePreset.BALANCED
+    image_quality: int = 82
+    output_policy: OutputPolicy = OutputPolicy.KEEP_BOTH
+    source_fingerprint: tuple[int, int, int, int] | None = None
 
 
 @dataclass

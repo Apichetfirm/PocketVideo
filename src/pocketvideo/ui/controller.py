@@ -20,6 +20,8 @@ from pocketvideo.core.models import (
     ResourceLimits,
     ResourceMode,
     TargetSizePlan,
+    ImagePreset,
+    OutputPolicy,
 )
 from pocketvideo.media.binaries import BinaryPaths, resolve_binaries
 from pocketvideo.media.encoder import (
@@ -32,6 +34,12 @@ from pocketvideo.media.presets import (
     can_smart_remux,
 )
 from pocketvideo.media.probe import inspect_media
+from pocketvideo.media.images import (
+    SUPPORTED_IMAGE_EXTENSIONS, inspect_image, IMAGE_OUTPUT_FORMATS,
+)
+from pocketvideo.core.output_safety import (
+    fingerprint, make_output_path, validate_suffix,
+)
 from pocketvideo.queue.manager import (
     QueueItem,
     QueueManager,
@@ -72,6 +80,11 @@ class AppController:
         )
         self.target_container: str = self.settings.default_container
         self.target_size_mb: float = 250.0
+        self.image_output_format: str = self.settings.default_image_format
+        self.image_preset: ImagePreset = ImagePreset(self.settings.default_image_preset)
+        self.image_quality: int = self.settings.image_quality
+        self.filename_suffix: str = self.settings.filename_suffix
+        self.output_policy: OutputPolicy = OutputPolicy(self.settings.output_policy)
         self.output_dir: Path = Path(self.settings.output_directory)
         self.advanced_options = AdvancedEncodingOptions()
         self.resource_limits = self._limits_from_settings()
@@ -180,7 +193,10 @@ class AppController:
             if p in existing_paths:
                 continue
             try:
-                meta = inspect_media(p, self.binaries)
+                meta = (
+                    inspect_image(p) if p.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+                    else inspect_media(p, self.binaries)
+                )
                 self.selected_files.append(meta)
                 existing_paths.add(p)
                 added.append(meta)
@@ -234,7 +250,7 @@ class AppController:
                     f"[{meta.file_path.name}] {t('warn_hdr_detected', hdr_format=v.hdr_format_name)}"
                 )
 
-            if self.active_preset == PresetId.CUSTOM_SIZE:
+            if self.active_preset == PresetId.CUSTOM_SIZE and meta.media_kind == "video":
                 plan = self.preview_target_size_plan(meta)
                 if plan.warning_message_key:
                     warnings.append(
@@ -261,42 +277,98 @@ class AppController:
             return OperationMode.SMART_REMUX, explanation
         return OperationMode.CONVERT_TRANSCODE, explanation
 
+    def update_output_preferences(
+        self, *, suffix: str | None = None,
+        policy: OutputPolicy | None = None,
+        image_format: str | None = None,
+        image_preset: ImagePreset | None = None,
+        image_quality: int | None = None,
+    ) -> None:
+        """Persist user-visible output settings and use them for subsequent jobs."""
+        if suffix is not None:
+            self.filename_suffix = validate_suffix(suffix)
+            self.settings.filename_suffix = self.filename_suffix
+        if policy is not None:
+            self.output_policy = OutputPolicy(policy)
+            self.settings.output_policy = self.output_policy.value
+        if image_format is not None:
+            if image_format.lower() not in IMAGE_OUTPUT_FORMATS:
+                raise ValueError("Unsupported image output format.")
+            self.image_output_format = image_format.lower()
+            self.settings.default_image_format = self.image_output_format
+        if image_preset is not None:
+            self.image_preset = ImagePreset(image_preset)
+            self.settings.default_image_preset = self.image_preset.value
+        if image_quality is not None:
+            self.image_quality = max(1, min(100, int(image_quality)))
+            self.settings.image_quality = self.image_quality
+        self.settings_mgr.save_settings()
+
     def enqueue_current_batch(
         self,
         operation_mode: OperationMode = OperationMode.COMPRESS,
         allow_smart_remux: bool = True,
         auto_start: bool = True,
     ) -> list[QueueItem]:
-        """Create and enqueue jobs for all currently selected files."""
+        """Prevalidate output decisions for the entire mixed-media batch."""
         if self.queue_manager is None:
             raise RuntimeError(self.binary_error or "QueueManager is unavailable.")
         if not self.selected_files:
-            raise ValueError("No video files selected.")
+            raise ValueError("No media files selected.")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        queued_items: list[QueueItem] = []
+        reserved: set[Path] = set()
+        specs: list[tuple[EncodingJobSpec, MediaMetadata]] = []
         for meta in self.selected_files:
-            suffix = "_remux" if operation_mode == OperationMode.SMART_REMUX else "_compressed"
-            out_path = build_safe_output_path(
+            is_image = meta.media_kind == "image"
+            target_fmt = self.image_output_format if is_image else self.target_container
+            from uuid import uuid4
+            job_id = uuid4().hex[:10]
+            chosen_path = make_output_path(
                 meta.file_path,
                 self.output_dir,
-                self.target_container,
-                suffix_tag=suffix,
+                target_fmt,
+                self.filename_suffix,
+                self.output_policy,
+                reserved,
+                job_id,
             )
+            if self.output_policy == OutputPolicy.SKIP_EXISTING and chosen_path.exists():
+                continue
+            reserved.add(chosen_path)
+            source_fp = fingerprint(meta.file_path)
             spec = EncodingJobSpec(
+                job_id=job_id,
                 input_path=meta.file_path,
-                output_path=out_path,
+                output_path=chosen_path,
                 operation_mode=operation_mode,
                 preset_id=self.active_preset,
                 compatibility_mode=self.compatibility_mode,
-                target_container=self.target_container,
-                target_size_mb=self.target_size_mb if self.active_preset == PresetId.CUSTOM_SIZE else None,
+                target_container=target_fmt,
+                target_size_mb=(
+                    self.target_size_mb if not is_image and
+                    self.active_preset == PresetId.CUSTOM_SIZE else None
+                ),
                 allow_smart_remux=allow_smart_remux,
                 advanced=replace(self.advanced_options),
                 resource_limits=replace(self.resource_limits),
+                media_kind=meta.media_kind,
+                image_preset=self.image_preset,
+                image_quality=self.image_quality,
+                output_policy=self.output_policy,
+                source_fingerprint=source_fp,
             )
-            item = self.queue_manager.enqueue(spec, input_metadata=meta, auto_start=auto_start)
-            queued_items.append(item)
-        return queued_items
+            specs.append((spec, meta))
+
+        items: list[QueueItem] = []
+        # Enqueue first, then start once, so summary callbacks see the whole batch.
+        for spec, meta in specs:
+            items.append(self.queue_manager.enqueue(
+                spec, input_metadata=meta, auto_start=False
+            ))
+        if auto_start and items:
+            self.queue_manager.start()
+        return items
 
     def generate_before_after_preview(
         self,

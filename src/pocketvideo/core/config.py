@@ -18,6 +18,9 @@ from pocketvideo.core.models import (
     PresetId,
     ProcessPriority,
     ResourceMode,
+    ImagePreset,
+    OutputPolicy,
+    AfterExportAction,
 )
 
 
@@ -75,6 +78,12 @@ class AppSettings:
     default_preset: str = PresetId.BEST_BALANCE.value
     compatibility_mode: str = CompatibilityMode.MODERN_ANDROID.value
     default_container: str = "mp4"
+    default_image_format: str = "webp"
+    default_image_preset: str = ImagePreset.BALANCED.value
+    image_quality: int = 82
+    filename_suffix: str = "_compressed"
+    output_policy: str = OutputPolicy.KEEP_BOTH.value
+    after_export_action: str = AfterExportAction.NONE.value
     output_directory: str = field(default_factory=lambda: str(get_default_output_dir()))
     resource_mode: str = ResourceMode.BALANCED.value
     cpu_hard_cap_percent: int = 75
@@ -97,6 +106,20 @@ class AppSettings:
         self.cpu_hard_cap_percent = max(10, min(100, int(self.cpu_hard_cap_percent)))
         self.cpu_threads = max(0, min(128, int(self.cpu_threads)))
         self.max_concurrent_jobs = max(1, min(8, int(self.max_concurrent_jobs)))
+        self.image_quality = max(1, min(100, int(self.image_quality)))
+        if self.default_image_format not in ("jpeg", "png", "webp", "heic", "avif"):
+            self.default_image_format = "webp"
+        if self.default_image_preset not in {p.value for p in ImagePreset}:
+            self.default_image_preset = ImagePreset.BALANCED.value
+        if self.output_policy not in {p.value for p in OutputPolicy}:
+            self.output_policy = OutputPolicy.KEEP_BOTH.value
+        if self.after_export_action not in {p.value for p in AfterExportAction}:
+            self.after_export_action = AfterExportAction.NONE.value
+        from pocketvideo.core.output_safety import validate_suffix
+        try:
+            self.filename_suffix = validate_suffix(self.filename_suffix)
+        except ValueError:
+            self.filename_suffix = "_compressed"
 
 
 class SettingsManager:
