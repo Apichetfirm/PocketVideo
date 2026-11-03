@@ -1362,37 +1362,92 @@ if PYSIDE6_AVAILABLE:
             else:
                 self.warning_banner.setVisible(False)
 
+        def _on_output_preferences_changed(self, *_args: object) -> bool:
+            try:
+                self.controller.update_output_preferences(
+                    suffix=self.suffix_edit.text(),
+                    policy=OutputPolicy(self.output_policy_combo.currentData()),
+                    image_format=str(self.image_format_combo.currentData()),
+                    image_preset=ImagePreset(self.image_preset_combo.currentData()),
+                    image_quality=self.image_quality_spin.value(),
+                )
+                self.controller.settings.after_export_action = AfterExportAction(
+                    self.after_action_combo.currentData()
+                ).value
+                self.controller.settings_mgr.save_settings()
+                self.image_quality_spin.setEnabled(
+                    self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
+                )
+                return True
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return False
+
+        def _confirm_batch_actions(self) -> bool:
+            t = self.controller.translator.t
+            if self.controller.output_policy in (
+                OutputPolicy.REPLACE_OUTPUT,
+                OutputPolicy.REPLACE_SOURCE_BACKUP,
+            ):
+                if QtWidgets.QMessageBox.question(
+                    self, "PocketVideo", t("overwrite_warning"),
+                    QtWidgets.QMessageBox.StandardButton.Yes |
+                    QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+            action = AfterExportAction(self.controller.settings.after_export_action)
+            if action != AfterExportAction.NONE:
+                if QtWidgets.QMessageBox.question(
+                    self, "PocketVideo",
+                    t("power_warning", action=action.value),
+                    QtWidgets.QMessageBox.StandardButton.Yes |
+                    QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+            return True
+
         def _start_compression_batch(self) -> None:
             if not self.controller.selected_files:
                 return
-
-
             if not self._sync_current_output_directory():
                 return
+            if not self._on_output_preferences_changed():
+                return
+            if not self._confirm_batch_actions():
+                return
             selected_op = self.operation_combo.currentData()
-            self.controller.enqueue_current_batch(
-                operation_mode=(OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
-                                else OperationMode.COMPRESS),
-                allow_smart_remux=(selected_op == "convert"),
+            try:
+                items = self.controller.enqueue_current_batch(
+                    operation_mode=(
+                        OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
+                        else OperationMode.COMPRESS
+                    ),
+                    allow_smart_remux=(selected_op == "convert"),
+                )
+            except (ValueError, OSError, RuntimeError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            if not items:
+                QtWidgets.QMessageBox.information(
+                    self, "PocketVideo", "No jobs queued: all output files already exist."
+                )
+                return
+            self._power_batch_ids = {item.spec.job_id for item in items}
+            self._power_batch_action = AfterExportAction(
+                self.controller.settings.after_export_action
             )
+            self._power_prompt_pending = False
             self._switch_page(2)
-
 
         def _go_to_convert_on_main(self) -> None:
             self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
             self._switch_page(0)
 
         def _start_conversion_batch(self) -> None:
-            if not self.controller.selected_files:
-                return
-
-            if not self._sync_current_output_directory():
-                return
-            self.controller.enqueue_current_batch(
-                operation_mode=OperationMode.CONVERT_TRANSCODE,
-                allow_smart_remux=self.chk_smart_remux.isChecked(),
-            )
-            self._switch_page(2)
+            self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
+            self._start_compression_batch()
 
         def _on_job_updated_ui(self, item: QueueItem) -> None:
             row = self._find_or_create_job_row(item.spec.job_id)
@@ -1473,6 +1528,62 @@ if PYSIDE6_AVAILABLE:
 
         def _on_queue_summary_ui(self, avg_pct: float, _completed: int, _total: int) -> None:
             self.overall_progress_bar.setValue(int(round(avg_pct)))
+            if (
+                self._power_batch_action == AfterExportAction.NONE
+                or not self._power_batch_ids
+                or self._power_prompt_pending
+                or self.controller.queue_manager is None
+            ):
+                return
+            statuses = {
+                x.spec.job_id: x.status for x in self.controller.queue_manager.items()
+            }
+            if not self._power_batch_ids.issubset(statuses):
+                return
+            # Never power off after a failed, skipped or cancelled job, or while
+            # any older queue job is still active.
+            if all(x == JobStatus.COMPLETED for x in statuses.values()):
+                self._power_prompt_pending = True
+                QtCore.QTimer.singleShot(0, self._show_post_export_countdown)
+
+        def _show_post_export_countdown(self) -> None:
+            action = self._power_batch_action
+            self._power_batch_ids = set()
+            self._power_batch_action = AfterExportAction.NONE
+            if action == AfterExportAction.NONE:
+                return
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("PocketVideo — After Export")
+            dialog.setMinimumWidth(440)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            label = QtWidgets.QLabel()
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            cancel = QtWidgets.QPushButton(
+                self.controller.translator.t("cancel_power")
+            )
+            cancel.clicked.connect(dialog.reject)
+            layout.addWidget(cancel)
+            remaining = [30]
+            def tick() -> None:
+                label.setText(
+                    self.controller.translator.t(
+                        "power_countdown", action=action.value,
+                        seconds=remaining[0]
+                    )
+                )
+                if remaining[0] <= 0:
+                    dialog.accept()
+                remaining[0] -= 1
+            timer = QtCore.QTimer(dialog)
+            timer.timeout.connect(tick)
+            tick()
+            timer.start(1000)
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                try:
+                    run_after_export(action, user_confirmed=True)
+                except (OSError, PermissionError, RuntimeError) as exc:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
 
         def _on_job_completed_ui(self, _comparison: JobResultComparison) -> None:
             self._refresh_history_table()
