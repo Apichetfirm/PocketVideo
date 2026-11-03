@@ -470,7 +470,9 @@ if PYSIDE6_AVAILABLE:
                 card.clicked.connect(self._on_preset_selected)
                 self.preset_cards[pid] = card
                 cards_row.addWidget(card, 1)
-            v.addLayout(cards_row)
+
+            self.preset_cards_widget = QtWidgets.QWidget()
+            self.preset_cards_widget.setLayout(cards_row)
 
             # Interactive comparison table: a compact alternative to the existing cards.
             self.preset_comparison_title = QtWidgets.QLabel()
@@ -487,7 +489,13 @@ if PYSIDE6_AVAILABLE:
             self.preset_table.cellClicked.connect(
                 lambda row, _col: self._on_preset_selected(list(PresetId)[row])
             )
-            v.addWidget(self.preset_table)
+
+            # Show only one presentation at a time: the short comparison table
+            # is the default, with all five original preset cards a tab away.
+            self.preset_tabs = QtWidgets.QTabWidget()
+            self.preset_tabs.addTab(self.preset_table, "")
+            self.preset_tabs.addTab(self.preset_cards_widget, "")
+            v.addWidget(self.preset_tabs)
             prefs_row = QtWidgets.QHBoxLayout()
             self.pref_quality = QtWidgets.QCheckBox()
             self.pref_size = QtWidgets.QCheckBox()
@@ -853,7 +861,10 @@ if PYSIDE6_AVAILABLE:
             self.preset_section_label.setText(t("preset_section_title"))
 
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
+
             self.preset_comparison_title.setText(t("preset_comparison_title"))
+            self.preset_tabs.setTabText(0, "ตารางเปรียบเทียบ" if self.controller.translator.language == "th" else "Comparison Table")
+            self.preset_tabs.setTabText(1, "Preset แบบเดิม" if self.controller.translator.language == "th" else "Preset Cards")
             self.preset_table.setHorizontalHeaderLabels([
                 t("preset_col_name"), t("preset_col_size"),
                 t("preset_col_speed"), t("preset_col_quality"),
@@ -993,7 +1004,8 @@ if PYSIDE6_AVAILABLE:
                      CompatibilityMode.MODERN_ANDROID else "H.264")
             if p.prefers_gpu:
                 detail += " • GPU (if supported)"
-            if self.chk_adv_override.isChecked() if hasattr(self, "chk_adv_override") else False:
+
+            if hasattr(self, "chk_adv_override") and self.chk_adv_override.isChecked():
                 detail += " • Manual overrides enabled (see Advanced)"
             self.encoding_details_label.setText(f"{codec} • {detail} • {self.controller.target_container.upper()}")
 
@@ -1038,14 +1050,18 @@ if PYSIDE6_AVAILABLE:
                 self.controller.set_output_directory(chosen)
                 self.out_dir_edit.setText(chosen)
 
-        def _sync_current_output_directory(self) -> None:
+
+        def _sync_current_output_directory(self) -> bool:
             path = self.out_dir_edit.text().strip()
             if not path:
-                return
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Please select an output folder.")
+                return False
             try:
                 self.controller.set_output_directory(path)
             except (ValueError, OSError) as exc:
                 QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return False
+            return True
 
         def _save_default_folder(self) -> None:
             try:
@@ -1241,7 +1257,9 @@ if PYSIDE6_AVAILABLE:
             if not self.controller.selected_files:
                 return
 
-            self._sync_current_output_directory()
+
+            if not self._sync_current_output_directory():
+                return
             selected_op = self.operation_combo.currentData()
             self.controller.enqueue_current_batch(
                 operation_mode=(OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
@@ -1258,7 +1276,9 @@ if PYSIDE6_AVAILABLE:
         def _start_conversion_batch(self) -> None:
             if not self.controller.selected_files:
                 return
-            self.controller.output_dir = Path(self.out_dir_edit.text().strip() or str(self.controller.output_dir))
+
+            if not self._sync_current_output_directory():
+                return
             self.controller.enqueue_current_batch(
                 operation_mode=OperationMode.CONVERT_TRANSCODE,
                 allow_smart_remux=self.chk_smart_remux.isChecked(),
