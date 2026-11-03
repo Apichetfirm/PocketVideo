@@ -302,6 +302,7 @@ class JobResultComparison:
     processing_duration_seconds: float
     completed_at_epoch: float = field(default_factory=time.time)
     warnings: list[str] = field(default_factory=list)
+    source_backup_path: Optional[Path] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -320,6 +321,7 @@ class JobResultComparison:
             "processing_duration_seconds": round(self.processing_duration_seconds, 2),
             "completed_at_epoch": self.completed_at_epoch,
             "warnings": list(self.warnings),
+            "source_backup_path": str(self.source_backup_path) if self.source_backup_path else None,
         }
 
     @classmethod
@@ -340,4 +342,5 @@ class JobResultComparison:
             processing_duration_seconds=float(data.get("processing_duration_seconds", 0.0)),
             completed_at_epoch=float(data.get("completed_at_epoch", 0.0)),
             warnings=list(data.get("warnings", [])),
+            source_backup_path=Path(data["source_backup_path"]) if data.get("source_backup_path") else None,
         )

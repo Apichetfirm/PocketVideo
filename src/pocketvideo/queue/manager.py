@@ -479,6 +479,10 @@ class QueueManager:
                 output_codec=out_v.codec_name if out_v else "unknown",
                 processing_duration_seconds=round(elapsed_total, 2),
                 warnings=list(item.warnings),
+                source_backup_path=(
+                    preserved_backup if item.spec.output_policy == OutputPolicy.REPLACE_SOURCE_BACKUP
+                    else None
+                ),
             )
 
             item.result = comparison
@@ -558,6 +562,10 @@ class QueueManager:
                 output_codec=item.spec.target_container,
                 processing_duration_seconds=round(time.monotonic() - started_monotonic, 2),
                 warnings=list(item.warnings),
+                source_backup_path=(
+                    backup if item.spec.output_policy == OutputPolicy.REPLACE_SOURCE_BACKUP
+                    else None
+                ),
             )
             item.result = result
             item.progress.percent = 100.0

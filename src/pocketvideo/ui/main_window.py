@@ -283,8 +283,13 @@ if PYSIDE6_AVAILABLE:
                 try:
                     original = Path(self._tmp.name) / "original.png"
                     converted = Path(self._tmp.name) / "result.png"
-                    extract_representative_frame(self.result.input_path, original, self.binaries)
-                    extract_representative_frame(self.result.output_path, converted, self.binaries)
+                    source_path = self.result.source_backup_path or self.result.input_path
+                    if source_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        thumbnail_png(source_path, original, (840, 700))
+                        thumbnail_png(self.result.output_path, converted, (840, 700))
+                    else:
+                        extract_representative_frame(source_path, original, self.binaries)
+                        extract_representative_frame(self.result.output_path, converted, self.binaries)
                     self.frames_ready.emit(str(original), str(converted))
                 except Exception as exc:
                     self.frames_error.emit(str(exc))
@@ -301,7 +306,10 @@ if PYSIDE6_AVAILABLE:
                     440, 360, Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 ))
-            self.status.setText("Actual decoded video frames — same timestamp (0.5s)")
+            self.status.setText(
+                "Actual decoded images" if self.result.input_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+                else "Actual decoded video frames — same timestamp (0.5s)"
+            )
 
         def _display_error(self, message: str) -> None:
             self.status.setText(message)
@@ -1231,7 +1239,7 @@ if PYSIDE6_AVAILABLE:
             t = self.controller.translator.t
             for row, media in enumerate(files):
                 path = media.file_path.resolve()
-                thumb = QtWidgets.QTableWidgetItem("🎞")
+                thumb = QtWidgets.QTableWidgetItem("🖼" if media.media_kind == "image" else "🎞")
                 self.file_table.setItem(row, 0, thumb)
                 item = QtWidgets.QTableWidgetItem(path.name)
                 item.setToolTip(str(path))
@@ -1241,6 +1249,8 @@ if PYSIDE6_AVAILABLE:
                 details = f"{format_bytes(media.file_size_bytes)}"
                 if v:
                     details += f" • {v.resolution_label} • {v.codec_name} • {v.fps:.1f}fps"
+                elif media.media_kind == "image":
+                    details += f" • Photo {media.image_width}x{media.image_height} • {media.container_format.upper()}"
                 self.file_table.setItem(row, 2, QtWidgets.QTableWidgetItem(details))
                 actions = QtWidgets.QWidget()
                 buttons = QtWidgets.QHBoxLayout(actions)
@@ -1273,10 +1283,13 @@ if PYSIDE6_AVAILABLE:
             def worker() -> None:
                 try:
                     with self._preview_semaphore:
-                        extract_representative_frame(
-                            path, target, self.controller.binaries,
-                            duration_seconds=media.duration_seconds,
-                        )
+                        if media.media_kind == "image":
+                            thumbnail_png(path, target)
+                        else:
+                            extract_representative_frame(
+                                path, target, self.controller.binaries,
+                                duration_seconds=media.duration_seconds,
+                            )
                     self.signals.preview_ready.emit(str(path), str(target))
                 except Exception:
                     pass  # Thumbnail failures must never prevent processing the input.
@@ -1302,29 +1315,47 @@ if PYSIDE6_AVAILABLE:
                     break
 
         def _prompt_add_files(self) -> None:
-            exts = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_VIDEO_EXTENSIONS))
+            exts = " ".join(f"*{ext}" for ext in sorted(
+                SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS
+            ))
             files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-                self, "Select Video Files", "", f"Video Files ({exts})"
+                self, "Select Videos & Photos", "", f"Videos & Photos ({exts})"
             )
             if files:
-                self.controller.add_files(files)
+                _, errors = self.controller.add_files(files)
                 self._refresh_selection_summary()
+                if errors:
+                    QtWidgets.QMessageBox.warning(
+                        self, "PocketVideo",
+                        self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
+                    )
 
         def _prompt_add_folder(self) -> None:
-            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Video Folder")
+            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Media Folder")
             if folder:
-                self.controller.add_folder(folder)
+                _, errors = self.controller.add_folder(folder)
                 self._refresh_selection_summary()
+                if errors:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", "\n".join(errors[:12]))
 
         def _clear_files(self) -> None:
             self.controller.clear_selected_files()
             self._refresh_selection_summary()
 
         def _open_compare_dialog(self) -> None:
-            if not self.controller.selected_files:
+            video = next((m for m in self.controller.selected_files if m.media_kind == "video"), None)
+            if video is None:
+                QtWidgets.QMessageBox.information(
+                    self, "PocketVideo", "Select a video for a short compression sample."
+                )
                 return
-            dlg = BeforeAfterCompareDialog(self.controller, self)
-            dlg.exec()
+            original = list(self.controller.selected_files)
+            try:
+                self.controller.selected_files = [video, *(m for m in original if m is not video)]
+                dlg = BeforeAfterCompareDialog(self.controller, self)
+                dlg.exec()
+            finally:
+                self.controller.selected_files = original
 
         def _refresh_selection_summary(self) -> None:
             files = self.controller.selected_files
@@ -1340,20 +1371,29 @@ if PYSIDE6_AVAILABLE:
             v = first.primary_video
             v_desc = (
                 f"{v.resolution_label} • {v.fps:.0f}fps • {v.codec_name.upper()} • {v.hdr_format_name}"
-                if v else "Unknown Video"
+                if v else (
+                    f"Photo {first.image_width}x{first.image_height} • {first.container_format.upper()}"
+                    if first.media_kind == "image" else "Unknown Video"
+                )
             )
             self.file_summary_label.setText(
                 f"Selected: {len(files)} file(s) ({format_bytes(total_bytes)}) — Primary: {first.file_path.name} [{v_desc}]"
             )
 
-            if self.controller.active_preset == PresetId.CUSTOM_SIZE:
-                plan = self.controller.preview_target_size_plan(first)
+            video = next((m for m in files if m.media_kind == "video"), None)
+            if self.controller.active_preset == PresetId.CUSTOM_SIZE and video:
+                plan = self.controller.preview_target_size_plan(video)
                 self.target_plan_status.setText(plan.explanation)
+            else:
+                self.target_plan_status.setText("")
 
-            mode, reason = self.controller.check_conversion_mode(
-                first, self.controller.target_container
-            )
-            self.convert_mode_banner.setText(f"{mode.value}: {reason}")
+            if video:
+                mode, reason = self.controller.check_conversion_mode(
+                    video, self.controller.target_container
+                )
+                self.convert_mode_banner.setText(f"{mode.value}: {reason}")
+            else:
+                self.convert_mode_banner.setText(self.controller.translator.t("image_support_note"))
 
             warnings = self.controller.evaluate_active_warnings()
             if warnings:
@@ -1475,6 +1515,13 @@ if PYSIDE6_AVAILABLE:
                 )
             elif item.error_message:
                 res_txt = item.error_message
+                if (
+                    "USB/HDD" in item.error_message
+                    and item.spec.job_id not in self._usb_error_alerted
+                ):
+                    self._usb_error_alerted.add(item.spec.job_id)
+                    self.warning_banner.setText(self.controller.translator.t("usb_disconnected"))
+                    self.warning_banner.setVisible(True)
             else:
                 res_txt = item.resource_summary
 
@@ -1511,7 +1558,8 @@ if PYSIDE6_AVAILABLE:
                 QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output folder is missing.")
 
         def _show_completed_compare(self, result: JobResultComparison) -> None:
-            if not result.input_path.is_file() or not result.output_path.is_file():
+            original_path = result.source_backup_path or result.input_path
+            if not original_path.is_file() or not result.output_path.is_file():
                 QtWidgets.QMessageBox.warning(self, "PocketVideo", "Input or output file is missing.")
                 return
             if not self.controller.binaries:
