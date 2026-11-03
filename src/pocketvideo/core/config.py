@@ -84,6 +84,7 @@ class AppSettings:
     filename_suffix: str = "_compressed"
     output_policy: str = OutputPolicy.KEEP_BOTH.value
     after_export_action: str = AfterExportAction.NONE.value
+    skip_larger_outputs: bool = False
     output_directory: str = field(default_factory=lambda: str(get_default_output_dir()))
     resource_mode: str = ResourceMode.BALANCED.value
     cpu_hard_cap_percent: int = 75

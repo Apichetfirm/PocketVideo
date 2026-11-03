@@ -70,6 +70,58 @@ class QueueJournalTests(unittest.TestCase):
             self.assertEqual(QueueJournal(path).load(), [])
 
 
+class UsbAndOverwriteSafetyTests(unittest.TestCase):
+    def test_atomic_replace_restores_original_when_second_rename_fails(self):
+        from pocketvideo.core.output_safety import (
+            fingerprint, promote_verified_output,
+        )
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source = root / "original.mp4"
+            stage = root / "stage.mp4"
+            source.write_bytes(b"original source bytes")
+            stage.write_bytes(b"new verified video")
+            fp = fingerprint(source)
+            actual_replace = os.replace
+            count = [0]
+
+            def fail_once(src, dst):
+                count[0] += 1
+                if count[0] == 2:
+                    raise OSError("simulated device failure before promotion")
+                return actual_replace(src, dst)
+
+            with mock.patch("pocketvideo.core.output_safety.os.replace",
+                            side_effect=fail_once):
+                with self.assertRaises(OSError):
+                    promote_verified_output(
+                        stage, source, source,
+                        OutputPolicy.REPLACE_SOURCE_BACKUP, fp,
+                    )
+            self.assertEqual(source.read_bytes(), b"original source bytes")
+            self.assertEqual(stage.read_bytes(), b"new verified video")
+
+    def test_lost_usb_source_blocks_promotion_without_touching_stage(self):
+        from pocketvideo.core.output_safety import (
+            fingerprint, promote_verified_output, StorageDisconnectedError,
+        )
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            source = root / "src.mp4"
+            stage = root / "stage.mp4"
+            source.write_bytes(b"source")
+            stage.write_bytes(b"encoded")
+            fp = fingerprint(source)
+            source.unlink()
+            with self.assertRaises(StorageDisconnectedError):
+                promote_verified_output(
+                    stage, root / "new.mp4", source,
+                    OutputPolicy.KEEP_BOTH, fp,
+                )
+            self.assertEqual(stage.read_bytes(), b"encoded")
+            self.assertFalse((root / "new.mp4").exists())
+
+
 class LargerOutputPolicyTests(unittest.TestCase):
     def test_very_small_png_preserves_original_if_output_grows(self):
         from PIL import Image

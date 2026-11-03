@@ -125,7 +125,8 @@ def promote_verified_output(
     # Best-effort flush file data before metadata promotion; required when
     # replacing an original on an external drive. Cannot guarantee survival
     # of faulty USB firmware or power loss without physical hardware testing.
-    with staged_file.open("rb") as handle:
+    with staged_file.open("r+b") as handle:
+        handle.flush()
         os.fsync(handle.fileno())
 
     target = source if policy == OutputPolicy.REPLACE_SOURCE_BACKUP else destination
