@@ -1,6 +1,6 @@
 # Third-Party Licenses & Source Availability Notices
 
-PocketVideo is licensed under the **GNU General Public License v3.0 or later (`GPL-3.0-or-later`)**, which is fully compatible with all bundled and linked open-source components listed below.
+PocketVideo source is licensed under **GNU GPL-3.0-or-later**. Bundled third-party libraries retain their own licenses; **redistribution compatibility has not been certified**. See the manual binary-release gate and dependency-by-dependency audit in `docs/DISTRIBUTION_COMPLIANCE.md`.
 
 ## 1. FFmpeg & FFprobe
 - **Website**: https://ffmpeg.org/
