@@ -666,32 +666,49 @@ if PYSIDE6_AVAILABLE:
             self.btn_start_compress.clicked.connect(self._start_compression_batch)
 
 
+            # Keep the always-needed controls and start button in a small card.
+            # Image profiles, suffix, overwrite and power actions are opt-in
+            # progressive disclosure, not a form users must scroll through.
             b_layout.addWidget(self.operation_label, 0, 0)
             b_layout.addWidget(self.operation_combo, 0, 1, 1, 3)
             b_layout.addWidget(self.lbl_compat, 1, 0)
-
             b_layout.addWidget(self.compat_combo, 1, 1)
             b_layout.addWidget(self.lbl_format, 1, 2)
             b_layout.addWidget(self.format_combo, 1, 3)
+            b_layout.addWidget(self.lbl_out_dir, 2, 0)
+            b_layout.addWidget(self.out_dir_edit, 2, 1, 1, 2)
+            b_layout.addWidget(self.btn_browse_out, 2, 3)
+            b_layout.addWidget(self.btn_save_out_default, 3, 1, 1, 3)
+            b_layout.addWidget(self.btn_start_compress, 4, 0, 1, 4)
 
-            b_layout.addWidget(self.lbl_image_format, 2, 0)
-            b_layout.addWidget(self.image_format_combo, 2, 1)
-            b_layout.addWidget(self.lbl_image_preset, 2, 2)
-            b_layout.addWidget(self.image_preset_combo, 2, 3)
-            b_layout.addWidget(self.lbl_image_quality, 3, 0)
-            b_layout.addWidget(self.image_quality_spin, 3, 1)
-            b_layout.addWidget(self.lbl_suffix, 4, 0)
-            b_layout.addWidget(self.suffix_edit, 4, 1)
-            b_layout.addWidget(self.lbl_collision, 4, 2)
-            b_layout.addWidget(self.output_policy_combo, 4, 3)
-            b_layout.addWidget(self.lbl_out_dir, 5, 0)
-            b_layout.addWidget(self.out_dir_edit, 5, 1, 1, 2)
-            b_layout.addWidget(self.btn_browse_out, 5, 3)
-            b_layout.addWidget(self.btn_save_out_default, 6, 1, 1, 3)
-            b_layout.addWidget(self.lbl_after, 7, 0)
-            b_layout.addWidget(self.after_action_combo, 7, 1, 1, 3)
-            b_layout.addWidget(self.btn_start_compress, 8, 0, 1, 4)
+            self.btn_toggle_export_options = QtWidgets.QPushButton()
+            self.btn_toggle_export_options.setCheckable(True)
+            self.export_options = QtWidgets.QFrame()
+            self.export_options.setObjectName("CardFrame")
+            options_layout = QtWidgets.QGridLayout(self.export_options)
+            options_layout.setContentsMargins(16, 12, 16, 12)
+            options_layout.setHorizontalSpacing(12)
+            options_layout.setVerticalSpacing(10)
+            options_layout.addWidget(self.lbl_image_format, 0, 0)
+            options_layout.addWidget(self.image_format_combo, 0, 1)
+            options_layout.addWidget(self.lbl_image_preset, 0, 2)
+            options_layout.addWidget(self.image_preset_combo, 0, 3)
+            options_layout.addWidget(self.lbl_image_quality, 1, 0)
+            options_layout.addWidget(self.image_quality_spin, 1, 1)
+            options_layout.addWidget(self.lbl_suffix, 2, 0)
+            options_layout.addWidget(self.suffix_edit, 2, 1)
+            options_layout.addWidget(self.lbl_collision, 2, 2)
+            options_layout.addWidget(self.output_policy_combo, 2, 3)
+            options_layout.addWidget(self.lbl_after, 3, 0)
+            options_layout.addWidget(self.after_action_combo, 3, 1, 1, 3)
+            self.export_options.setVisible(False)
+            self.btn_toggle_export_options.toggled.connect(self.export_options.setVisible)
+            self.btn_toggle_export_options.toggled.connect(
+                lambda _checked: self._refresh_export_toggle_caption()
+            )
             v.addWidget(bottom_card)
+            v.addWidget(self.btn_toggle_export_options)
+            v.addWidget(self.export_options)
 
             # Expandable Advanced Settings Panel
             self.btn_toggle_advanced = QtWidgets.QPushButton()
@@ -1031,6 +1048,13 @@ if PYSIDE6_AVAILABLE:
                 self.after_action_combo.setItemText(row, t(key))
             self.image_quality_spin.setEnabled(
                 self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
+            )
+            self.btn_toggle_export_options.setText(
+                ("ตั้งค่า Export เพิ่มเติม ▴" if self.btn_toggle_export_options.isChecked()
+                 else "ตั้งค่า Export เพิ่มเติม ▾")
+                if self.controller.translator.language == "th"
+                else ("More export settings ▴" if self.btn_toggle_export_options.isChecked()
+                      else "More export settings ▾")
             )
             self.btn_start_compress.setText(t("btn_start_compress"))
             self._on_operation_changed()
@@ -1422,6 +1446,14 @@ if PYSIDE6_AVAILABLE:
                 self.warning_banner.setVisible(True)
             else:
                 self.warning_banner.setVisible(False)
+
+        def _refresh_export_toggle_caption(self) -> None:
+            thai = self.controller.translator.language == "th"
+            expanded = self.btn_toggle_export_options.isChecked()
+            self.btn_toggle_export_options.setText(
+                ("ตั้งค่า Export เพิ่มเติม ▴" if expanded else "ตั้งค่า Export เพิ่มเติม ▾")
+                if thai else ("More export settings ▴" if expanded else "More export settings ▾")
+            )
 
         def _on_output_preferences_changed(self, *_args: object) -> bool:
             try:
