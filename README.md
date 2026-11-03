@@ -110,3 +110,8 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 ### Third-party codec obligations
 `pillow-heif` binaries include codecs whose license terms may differ from the source package (including GPL and LGPL components); see `THIRD_PARTY_NOTICES.md` and upstream `LICENSES_bundled.txt`. Distributors must confirm binary/source license obligations and applicable HEVC patents before redistributing modified bundles. This is not a claim that all HEIC licensing requirements have been cleared.
 
+
+
+## Creator credit
+
+**Created by Firm Impulse.** PocketVideo is free and open source. Contributions and third-party library attribution remain acknowledged under the applicable license files and third-party notices.

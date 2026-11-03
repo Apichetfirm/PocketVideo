@@ -35,6 +35,7 @@ class MixedMediaUITests(unittest.TestCase):
             window = PocketVideoMainWindow(controller)
             try:
                 window._refresh_selection_summary()
+                self.assertEqual(window.creator_credit_label.text(), "Created by Firm Impulse")
                 self.assertEqual(window.file_table.rowCount(), 1)
                 self.assertIn("Photo", window.file_table.item(0, 2).text())
                 self.assertTrue(img.exists())
