@@ -46,9 +46,17 @@ from pocketvideo.core.models import (
     PresetId,
     ProcessPriority,
     ResourceMode,
+    OutputPolicy,
+    AfterExportAction,
+    ImagePreset,
+    JobStatus,
 )
 from pocketvideo.media.presets import PRESET_CATALOG
 from pocketvideo.media.encoder import extract_representative_frame
+from pocketvideo.media.images import (
+    SUPPORTED_IMAGE_EXTENSIONS, IMAGE_OUTPUT_FORMATS, thumbnail_png,
+)
+from pocketvideo.resources.post_export import run_after_export
 from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
@@ -313,6 +321,10 @@ if PYSIDE6_AVAILABLE:
             self._preview_semaphore = threading.Semaphore(2)
             self._thumbnail_jobs: set[str] = set()
             self._last_import_paths: tuple[str, ...] = ()
+            self._power_batch_ids: set[str] = set()
+            self._power_batch_action = AfterExportAction.NONE
+            self._power_prompt_pending = False
+            self._usb_error_alerted: set[str] = set()
             self._thumbnail_dir = Path(tempfile.gettempdir()) / "pocketvideo_previews"
 
             if self.controller.queue_manager:
@@ -585,6 +597,54 @@ if PYSIDE6_AVAILABLE:
             self.btn_save_out_default.clicked.connect(self._save_default_folder)
             self.out_dir_edit.editingFinished.connect(self._sync_current_output_directory)
 
+
+            # Independent still-image format/quality controls work in mixed
+            # batches without changing the selected VIDEO preset.
+            self.lbl_image_format = QtWidgets.QLabel()
+            self.image_format_combo = QtWidgets.QComboBox()
+            for ext in IMAGE_OUTPUT_FORMATS:
+                self.image_format_combo.addItem(ext.upper(), ext)
+            self.image_format_combo.setCurrentIndex(
+                max(0, self.image_format_combo.findData(self.controller.image_output_format))
+            )
+            self.image_format_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+
+            self.lbl_image_preset = QtWidgets.QLabel()
+            self.image_preset_combo = QtWidgets.QComboBox()
+            for profile in ImagePreset:
+                self.image_preset_combo.addItem("", profile.value)
+            self.image_preset_combo.setCurrentIndex(
+                max(0, self.image_preset_combo.findData(self.controller.image_preset.value))
+            )
+            self.image_preset_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.lbl_image_quality = QtWidgets.QLabel()
+            self.image_quality_spin = QtWidgets.QSpinBox()
+            self.image_quality_spin.setRange(1, 100)
+            self.image_quality_spin.setValue(self.controller.image_quality)
+            self.image_quality_spin.valueChanged.connect(self._on_output_preferences_changed)
+
+            self.lbl_suffix = QtWidgets.QLabel()
+            self.suffix_edit = QtWidgets.QLineEdit(self.controller.filename_suffix)
+            self.suffix_edit.setMaxLength(48)
+            self.suffix_edit.editingFinished.connect(self._on_output_preferences_changed)
+            self.lbl_collision = QtWidgets.QLabel()
+            self.output_policy_combo = QtWidgets.QComboBox()
+            for policy in OutputPolicy:
+                self.output_policy_combo.addItem("", policy.value)
+            self.output_policy_combo.setCurrentIndex(
+                max(0, self.output_policy_combo.findData(self.controller.output_policy.value))
+            )
+            self.output_policy_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.lbl_after = QtWidgets.QLabel()
+            self.after_action_combo = QtWidgets.QComboBox()
+            for action in AfterExportAction:
+                self.after_action_combo.addItem("", action.value)
+            self.after_action_combo.setCurrentIndex(
+                max(0, self.after_action_combo.findData(
+                    self.controller.settings.after_export_action))
+            )
+            self.after_action_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+
             self.btn_start_compress = QtWidgets.QPushButton()
             self.btn_start_compress.setObjectName("PrimaryStartButton")
             self.btn_start_compress.clicked.connect(self._start_compression_batch)
@@ -597,11 +657,24 @@ if PYSIDE6_AVAILABLE:
             b_layout.addWidget(self.compat_combo, 1, 1)
             b_layout.addWidget(self.lbl_format, 1, 2)
             b_layout.addWidget(self.format_combo, 1, 3)
-            b_layout.addWidget(self.lbl_out_dir, 2, 0)
-            b_layout.addWidget(self.out_dir_edit, 2, 1, 1, 2)
-            b_layout.addWidget(self.btn_browse_out, 2, 3)
-            b_layout.addWidget(self.btn_save_out_default, 3, 1, 1, 3)
-            b_layout.addWidget(self.btn_start_compress, 4, 0, 1, 4)
+
+            b_layout.addWidget(self.lbl_image_format, 2, 0)
+            b_layout.addWidget(self.image_format_combo, 2, 1)
+            b_layout.addWidget(self.lbl_image_preset, 2, 2)
+            b_layout.addWidget(self.image_preset_combo, 2, 3)
+            b_layout.addWidget(self.lbl_image_quality, 3, 0)
+            b_layout.addWidget(self.image_quality_spin, 3, 1)
+            b_layout.addWidget(self.lbl_suffix, 4, 0)
+            b_layout.addWidget(self.suffix_edit, 4, 1)
+            b_layout.addWidget(self.lbl_collision, 4, 2)
+            b_layout.addWidget(self.output_policy_combo, 4, 3)
+            b_layout.addWidget(self.lbl_out_dir, 5, 0)
+            b_layout.addWidget(self.out_dir_edit, 5, 1, 1, 2)
+            b_layout.addWidget(self.btn_browse_out, 5, 3)
+            b_layout.addWidget(self.btn_save_out_default, 6, 1, 1, 3)
+            b_layout.addWidget(self.lbl_after, 7, 0)
+            b_layout.addWidget(self.after_action_combo, 7, 1, 1, 3)
+            b_layout.addWidget(self.btn_start_compress, 8, 0, 1, 4)
             v.addWidget(bottom_card)
 
             # Expandable Advanced Settings Panel
@@ -920,6 +993,29 @@ if PYSIDE6_AVAILABLE:
             self.operation_combo.setItemText(2, t("operation_both"))
             self.btn_browse_out.setText(t("btn_browse_output"))
 
+            self.lbl_image_format.setText(t("image_format_label"))
+            self.lbl_image_preset.setText(t("image_profile_label"))
+            self.lbl_image_quality.setText(t("image_quality_label"))
+            for row, key in enumerate(
+                ("image_quality_best", "image_quality_balanced", "image_quality_small",
+                 "image_quality_fast", "image_quality_custom")
+            ):
+                self.image_preset_combo.setItemText(row, t(key))
+            self.lbl_suffix.setText(t("filename_suffix_label"))
+            self.lbl_collision.setText(t("output_policy_label"))
+            for row, key in enumerate(
+                ("output_policy_keep", "output_policy_skip", "output_policy_replace_target",
+                 "output_policy_replace_source")
+            ):
+                self.output_policy_combo.setItemText(row, t(key))
+            self.lbl_after.setText(t("after_export_label"))
+            for row, key in enumerate(
+                ("after_export_none", "after_export_sleep", "after_export_shutdown")
+            ):
+                self.after_action_combo.setItemText(row, t(key))
+            self.image_quality_spin.setEnabled(
+                self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
+            )
             self.btn_start_compress.setText(t("btn_start_compress"))
             self._on_operation_changed()
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
