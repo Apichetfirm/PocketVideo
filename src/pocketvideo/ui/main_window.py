@@ -365,7 +365,7 @@ if PYSIDE6_AVAILABLE:
                 self.controller.queue_manager.on_queue_summary = self.signals.queue_summary.emit
                 self.controller.queue_manager.on_job_completed = self.signals.job_completed.emit
 
-            self.setMinimumSize(1120, 760)
+            self.setMinimumSize(1020, 690)
             self.preset_cards: dict[PresetId, PresetCardWidget] = {}
             self.nav_buttons: list[QtWidgets.QPushButton] = []
 
@@ -423,6 +423,7 @@ if PYSIDE6_AVAILABLE:
                 side_v.addWidget(btn)
                 self.nav_buttons.append(btn)
 
+            self.btn_nav_convert.hide()  # Convert is now a dashboard choice.
             side_v.addStretch(1)
 
             # Language & Theme quick selectors
@@ -458,9 +459,10 @@ if PYSIDE6_AVAILABLE:
             scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
 
             page = QtWidgets.QWidget()
+            page.setObjectName("DashboardPage")
             v = QtWidgets.QVBoxLayout(page)
-            v.setContentsMargins(28, 24, 28, 24)
-            v.setSpacing(16)
+            v.setContentsMargins(20, 16, 20, 16)
+            v.setSpacing(10)
 
             self.header_title = QtWidgets.QLabel()
             self.header_title.setObjectName("HeadingLabel")
@@ -496,12 +498,16 @@ if PYSIDE6_AVAILABLE:
             self.file_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
             self.file_table.verticalHeader().setVisible(False)
             self.file_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-            self.file_table.setColumnWidth(0, 100)
+            self.file_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.setColumnWidth(0, 82)
+            self.file_table.setColumnWidth(2, 215)
+            self.file_table.setColumnWidth(3, 146)
             self.file_table.setMinimumHeight(140)
-            self.file_table.setMaximumHeight(310)
-            self.file_table.setIconSize(QtCore.QSize(88, 50))
+            self.file_table.setMaximumHeight(225)
+            self.file_table.setIconSize(QtCore.QSize(74, 44))
+            self.file_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.file_table.cellDoubleClicked.connect(self._preview_input_row)
             v.addWidget(self.file_table)
             self.file_table_title.setVisible(False)
@@ -519,7 +525,7 @@ if PYSIDE6_AVAILABLE:
             self.preset_disclaimer_label = QtWidgets.QLabel()
             self.preset_disclaimer_label.setObjectName("MutedLabel")
             v.addWidget(self.preset_section_label)
-            v.addWidget(self.preset_disclaimer_label)
+            self.preset_disclaimer_label.hide()
 
             cards_row = QtWidgets.QHBoxLayout()
             cards_row.setSpacing(12)
@@ -542,7 +548,7 @@ if PYSIDE6_AVAILABLE:
             # Interactive comparison table: a compact alternative to the existing cards.
             self.preset_comparison_title = QtWidgets.QLabel()
             self.preset_comparison_title.setObjectName("HeadingLabel")
-            v.addWidget(self.preset_comparison_title)
+            self.preset_comparison_title.hide()
             self.preset_table = QtWidgets.QTableWidget(len(PresetId), 4)
             self.preset_table.verticalHeader().setVisible(False)
             self.preset_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -575,6 +581,7 @@ if PYSIDE6_AVAILABLE:
             self.preference_message.setObjectName("MutedLabel")
             self.preference_message.setWordWrap(True)
             v.addWidget(self.preference_message)
+            self.preference_message.setVisible(False)
             self.encoding_details_label = QtWidgets.QLabel()
             self.encoding_details_label.setObjectName("SubheadingLabel")
             self.encoding_details_label.setWordWrap(True)
@@ -993,7 +1000,7 @@ if PYSIDE6_AVAILABLE:
             self.drop_zone.btn_add_folder.setText(t("btn_add_folder"))
             self.drop_zone.btn_clear.setText(t("btn_clear_selection"))
             self.drop_zone.btn_inspect.setText(t("btn_inspect_frames"))
-            self.file_table_title.setText(t("import_preview_header"))
+            self.file_table_title.setText(t("import_preview_header").split("(")[0].strip())
             self.file_table.setHorizontalHeaderLabels([
                 t("import_preview_col"), t("import_filename_col"),
                 t("import_info_col"), t("import_action_col"),
@@ -1002,7 +1009,11 @@ if PYSIDE6_AVAILABLE:
             self._last_import_paths = ()
             self._refresh_imported_file_table()
 
-            self.preset_section_label.setText(t("preset_section_title"))
+            self.preset_section_label.setText(
+                "โหมดบีบอัด • เลือกแถวที่เหมาะกับคุณ"
+                if self.controller.translator.language == "th"
+                else "Compression presets • choose a row"
+            )
 
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
 
@@ -1133,6 +1144,7 @@ if PYSIDE6_AVAILABLE:
                     with QtCore.QSignalBlocker(preference):
                         preference.setChecked(False)
                 self.preference_message.setText(self.controller.translator.t("pref_info"))
+                self.preference_message.setVisible(False)
             with QtCore.QSignalBlocker(self.preset_table):
                 self.preset_table.selectRow(list(PresetId).index(preset_id))
             self._refresh_encoding_details()
@@ -1148,6 +1160,7 @@ if PYSIDE6_AVAILABLE:
             speed = self.pref_speed.isChecked()
             if not (quality or small or speed):
                 self.preference_message.setText(self.controller.translator.t("pref_info"))
+                self.preference_message.setVisible(False)
                 return
             if small and quality:
                 recommended = PresetId.BEST_BALANCE
@@ -1158,6 +1171,7 @@ if PYSIDE6_AVAILABLE:
             else:
                 recommended = PresetId.BEST_QUALITY
             self._on_preset_selected(recommended, from_preferences=True)
+            self.preference_message.setVisible(True)
             self.preference_message.setText(
                 self.controller.translator.t("pref_conflict")
                 if sum((quality, small, speed)) > 1
@@ -1315,12 +1329,17 @@ if PYSIDE6_AVAILABLE:
                     details += f" • {v.resolution_label} • {v.codec_name} • {v.fps:.1f}fps"
                 elif media.media_kind == "image":
                     details += f" • Photo {media.image_width}x{media.image_height} • {media.container_format.upper()}"
-                self.file_table.setItem(row, 2, QtWidgets.QTableWidgetItem(details))
+                details_item = QtWidgets.QTableWidgetItem(details)
+                details_item.setToolTip(details)
+                self.file_table.setItem(row, 2, details_item)
                 actions = QtWidgets.QWidget()
                 buttons = QtWidgets.QHBoxLayout(actions)
                 buttons.setContentsMargins(2, 1, 2, 1)
-                open_btn = QtWidgets.QPushButton(t("import_open"))
-                remove_btn = QtWidgets.QPushButton(t("import_remove"))
+                open_btn = QtWidgets.QToolButton()
+                open_btn.setText(t("import_open"))
+                remove_btn = QtWidgets.QToolButton()
+                remove_btn.setText("✕")
+                remove_btn.setToolTip(t("import_remove"))
                 open_btn.clicked.connect(lambda _checked=False, p=path: self._open_input_file(p))
                 remove_btn.clicked.connect(lambda _checked=False, p=path: self._remove_imported_file(p))
                 buttons.addWidget(open_btn)
@@ -1367,7 +1386,7 @@ if PYSIDE6_AVAILABLE:
             if pixmap.isNull():
                 return
             pixmap = pixmap.scaled(
-                88, 50, Qt.AspectRatioMode.KeepAspectRatio,
+                74, 44, Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             for row in range(self.file_table.rowCount()):
@@ -1441,7 +1460,8 @@ if PYSIDE6_AVAILABLE:
                 )
             )
             self.file_summary_label.setText(
-                f"Selected: {len(files)} file(s) ({format_bytes(total_bytes)}) — Primary: {first.file_path.name} [{v_desc}]"
+                f"{'เลือก' if self.controller.translator.language == 'th' else 'Selected'} "
+                f"{len(files)} files • {format_bytes(total_bytes)} • {first.file_path.name} [{v_desc}]"
             )
 
             video = next((m for m in files if m.media_kind == "video"), None)
