@@ -106,6 +106,9 @@ def encode_image(
         "jpeg": "JPEG", "png": "PNG", "webp": "WEBP",
         "heic": "HEIF", "avif": "AVIF"
     }[dst_fmt]
+    # Pillow loads many native encoders lazily. Enumerating Image.SAVE without
+    # Image.init() wrongly reports WEBP unavailable even on a standard wheel.
+    Image.init()
     if fmt not in Image.SAVE:
         raise RuntimeError(f"{fmt} image encoder is not available in this offline build.")
 

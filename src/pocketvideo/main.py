@@ -10,7 +10,9 @@ from typing import Optional
 from pocketvideo import __app_name__, __version__
 from pocketvideo.core.config import configure_logging
 from pocketvideo.core.i18n import format_bytes
-from pocketvideo.core.models import CompatibilityMode, OperationMode, PresetId
+from pocketvideo.core.models import (
+    CompatibilityMode, OperationMode, PresetId, ImagePreset, OutputPolicy,
+)
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.main_window import PYSIDE6_AVAILABLE
 
@@ -32,6 +34,23 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--format", default="mp4", choices=["mp4", "mkv", "mov", "webm", "avi"])
     parser.add_argument("--output-dir", type=str, default="", help="Destination directory for output files")
     parser.add_argument(
+        "--image-format", default="webp", choices=("jpeg", "png", "webp", "heic", "avif"),
+        help="Still-image output format, independent of the video format",
+    )
+    parser.add_argument(
+        "--image-preset", default=ImagePreset.BALANCED.value,
+        choices=[p.value for p in ImagePreset],
+    )
+    parser.add_argument("--suffix", default="_compressed", help="Filename suffix, e.g. _small")
+    parser.add_argument(
+        "--output-policy", default=OutputPolicy.KEEP_BOTH.value,
+        choices=[p.value for p in OutputPolicy],
+    )
+    parser.add_argument(
+        "--confirm-overwrite", action="store_true",
+        help="Required for destructive replace-original/replace-output policies",
+    )
+    parser.add_argument(
         "--compat",
         choices=[c.value for c in CompatibilityMode],
         default=CompatibilityMode.MODERN_ANDROID.value,
@@ -47,6 +66,16 @@ def run_cli_batch(args: argparse.Namespace) -> int:
     controller.target_size_mb = args.target_size_mb
     controller.target_container = args.format
     controller.compatibility_mode = CompatibilityMode(args.compat)
+    policy = OutputPolicy(args.output_policy)
+    if policy in (OutputPolicy.REPLACE_SOURCE_BACKUP, OutputPolicy.REPLACE_OUTPUT) and not args.confirm_overwrite:
+        print("[ERROR] Destructive replacement requires --confirm-overwrite.", file=sys.stderr)
+        return 3
+    controller.update_output_preferences(
+        image_format=args.image_format,
+        image_preset=ImagePreset(args.image_preset),
+        suffix=args.suffix,
+        policy=policy,
+    )
     if args.output_dir:
         controller.output_dir = Path(args.output_dir).resolve()
 
