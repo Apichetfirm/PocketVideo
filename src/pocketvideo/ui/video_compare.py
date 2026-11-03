@@ -144,6 +144,9 @@ class ZoomDetailDialog(QtWidgets.QDialog):
 class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
     """Shared transport for simultaneous original and compressed playback."""
 
+    quality_ready = Signal(object)
+    quality_failed = Signal(str)
+
     def __init__(self, before: Path, after: Path, binaries, parent=None, before_offset_ms: int = 0):
         super().__init__(parent)
         self.before_offset_ms = max(0, int(before_offset_ms))
@@ -156,6 +159,9 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
         self.resize(1140, 660)
         self._seeking = False
         self._zoom_dialogs: list[ZoomDetailDialog] = []
+        self._quality_running = False
+        self.quality_ready.connect(self._show_quality)
+        self.quality_failed.connect(self._quality_error)
         self._players: list[QMediaPlayer] = []
         self._outputs: list[QAudioOutput] = []
 
@@ -203,10 +209,16 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
         self.clock = QtWidgets.QLabel("00:00:00 / 00:00:00")
         self.zoom_button = QtWidgets.QPushButton("ขยายดูรายละเอียด 100–500%")
         self.zoom_button.clicked.connect(self.open_detail_zoom)
+        self.quality_button = QtWidgets.QPushButton("ตรวจคุณภาพ SSIM/VMAF")
+        self.quality_button.setToolTip(
+            "วิเคราะห์ตัวอย่างสูงสุด 6 วินาที; คะแนน SSIM/VMAF ขึ้นกับคลิปและ Codec"
+        )
+        self.quality_button.clicked.connect(self._start_quality_analysis)
         transport.addWidget(self.play_button)
         transport.addWidget(self.seek_slider, 1)
         transport.addWidget(self.clock)
         transport.addWidget(self.zoom_button)
+        transport.addWidget(self.quality_button)
         layout.addLayout(transport)
         self.status_label = QtWidgets.QLabel("เริ่มเล่นวิดีโอได้เลย (เสียงปิดอยู่เพื่อไม่ให้ซ้อนกัน)")
         self.status_label.setObjectName("MutedLabel")
@@ -309,6 +321,43 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
         self._zoom_dialogs.append(dialog)
         dialog.finished.connect(lambda _code, d=dialog: self._forget_zoom(d))
         dialog.show()
+
+    def _start_quality_analysis(self) -> None:
+        if self._quality_running:
+            return
+        self._quality_running = True
+        self.quality_button.setEnabled(False)
+        self.status_label.setText("กำลังตรวจ SSIM/VMAF จากไฟล์จริง…")
+        before, after = self.before_path, self.after_path
+        offset = self.before_offset_ms / 1000.0
+        binaries = self.binaries
+
+        def worker() -> None:
+            try:
+                from pocketvideo.media.quality import analyze_video_quality
+                self.quality_ready.emit(analyze_video_quality(
+                    before, after, binaries, before_offset_seconds=offset,
+                ))
+            except Exception as exc:
+                self.quality_failed.emit(str(exc))
+
+        threading.Thread(
+            target=worker, name="PocketVideoQualityAnalysis", daemon=True
+        ).start()
+
+    def _show_quality(self, result: object) -> None:
+        self._quality_running = False
+        self.quality_button.setEnabled(True)
+        score = result["ssim"]
+        vmaf = result["vmaf"]
+        text = f"SSIM: {score:.4f}" if score is not None else "SSIM: unavailable"
+        text += f" • VMAF: {vmaf:.1f}" if vmaf is not None else " • VMAF: not available"
+        self.status_label.setText(text + " (sampled 6s / 640×360, not full video)")
+
+    def _quality_error(self, message: str) -> None:
+        self._quality_running = False
+        self.quality_button.setEnabled(True)
+        self.status_label.setText("ตรวจคุณภาพไม่สำเร็จ: " + message[:250])
 
     def _forget_zoom(self, dialog: ZoomDetailDialog) -> None:
         if dialog in self._zoom_dialogs:

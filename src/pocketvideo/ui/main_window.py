@@ -53,10 +53,13 @@ from pocketvideo.core.models import (
 from pocketvideo.media.presets import PRESET_CATALOG
 from pocketvideo.media.encoder import extract_representative_frame
 from pocketvideo.media.images import (
-    SUPPORTED_IMAGE_EXTENSIONS, IMAGE_OUTPUT_FORMATS, thumbnail_png,
+    SUPPORTED_IMAGE_EXTENSIONS, IMAGE_OUTPUT_FORMATS, thumbnail_png, inspect_image,
 )
+from pocketvideo.media.probe import inspect_media
 from pocketvideo.resources.post_export import run_after_export
-from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
+from pocketvideo.queue.manager import (
+    QueueItem, SUPPORTED_VIDEO_EXTENSIONS, discover_videos_in_folder,
+)
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
 from pocketvideo.ui.file_actions import reveal_file_in_location
@@ -70,6 +73,7 @@ if PYSIDE6_AVAILABLE:
         queue_summary = Signal(float, int, int)
         job_completed = Signal(object)
         preview_ready = Signal(str, str)
+        import_ready = Signal(object, object)
 
     class DragDropVideoZone(QtWidgets.QFrame):
         """Large drag-and-drop area accepting multiple video files or folders."""
@@ -350,6 +354,9 @@ if PYSIDE6_AVAILABLE:
             self.signals.queue_summary.connect(self._on_queue_summary_ui)
             self.signals.job_completed.connect(self._on_job_completed_ui)
             self.signals.preview_ready.connect(self._on_thumbnail_ready)
+            self.signals.import_ready.connect(self._on_import_ready)
+            self._import_busy = False
+            self._pending_imports: list[list[str]] = []
             self._preview_semaphore = threading.Semaphore(2)
             self._thumbnail_jobs: set[str] = set()
             self._last_import_paths: tuple[str, ...] = ()
@@ -683,6 +690,9 @@ if PYSIDE6_AVAILABLE:
                 max(0, self.output_policy_combo.findData(self.controller.output_policy.value))
             )
             self.output_policy_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.skip_larger_check = QtWidgets.QCheckBox()
+            self.skip_larger_check.setChecked(self.controller.settings.skip_larger_outputs)
+            self.skip_larger_check.toggled.connect(self._on_output_preferences_changed)
             self.lbl_after = QtWidgets.QLabel()
             self.after_action_combo = QtWidgets.QComboBox()
             for action in AfterExportAction:
@@ -731,8 +741,9 @@ if PYSIDE6_AVAILABLE:
             options_layout.addWidget(self.suffix_edit, 2, 1)
             options_layout.addWidget(self.lbl_collision, 2, 2)
             options_layout.addWidget(self.output_policy_combo, 2, 3)
-            options_layout.addWidget(self.lbl_after, 3, 0)
-            options_layout.addWidget(self.after_action_combo, 3, 1, 1, 3)
+            options_layout.addWidget(self.skip_larger_check, 3, 0, 1, 4)
+            options_layout.addWidget(self.lbl_after, 4, 0)
+            options_layout.addWidget(self.after_action_combo, 4, 1, 1, 3)
             self.export_options.setVisible(False)
             self.btn_toggle_export_options.toggled.connect(self.export_options.setVisible)
             self.btn_toggle_export_options.toggled.connect(
@@ -1082,6 +1093,11 @@ if PYSIDE6_AVAILABLE:
                  "output_policy_replace_source")
             ):
                 self.output_policy_combo.setItemText(row, t(key))
+            self.skip_larger_check.setText(
+                "ไม่บันทึกผลบีบอัดที่ใหญ่กว่าต้นฉบับ"
+                if self.controller.translator.language == "th"
+                else "Discard compressed output if not smaller than original"
+            )
             self.lbl_after.setText(t("after_export_label"))
             for row, key in enumerate(
                 ("after_export_none", "after_export_sleep", "after_export_shutdown")
@@ -1285,21 +1301,78 @@ if PYSIDE6_AVAILABLE:
             adv.audio_codec = str(self.adv_audio_combo.currentData() or "copy")
 
         def _on_paths_dropped(self, paths: list[str]) -> None:
-            errors: list[str] = []
-            for p_str in paths:
-                p = Path(p_str)
-                _, failed = (
-                    self.controller.add_folder(p) if p.is_dir()
-                    else self.controller.add_files([p])
-                )
-                errors.extend(failed)
-            self._refresh_selection_summary()
-            if errors:
-                QtWidgets.QMessageBox.warning(
-                    self, "PocketVideo",
-                    self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
-                )
+            """Never run ffprobe or image decoding on the Qt event thread."""
+            if paths:
+                self._pending_imports.append(list(paths))
+                self._begin_next_import()
 
+        def _begin_next_import(self) -> None:
+            if self._import_busy or not self._pending_imports:
+                return
+            pending = self._pending_imports.pop(0)
+            self._import_busy = True
+            self.drop_zone.btn_add_files.setEnabled(False)
+            self.drop_zone.btn_add_folder.setEnabled(False)
+            self.drop_zone.btn_clear.setEnabled(False)
+            self.btn_start_compress.setEnabled(False)
+            old = {m.file_path.resolve() for m in self.controller.selected_files}
+            bins = self.controller.binaries
+
+            def inspect_in_background() -> None:
+                found = []
+                errors = []
+                seen = set(old)
+                for raw in pending:
+                    p = Path(raw).expanduser()
+                    if p.is_dir():
+                        candidates = discover_videos_in_folder(p)
+                    else:
+                        candidates = [p]
+                    for candidate in candidates:
+                        try:
+                            candidate = candidate.resolve()
+                            if candidate in seen:
+                                continue
+                            seen.add(candidate)
+                            if candidate.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                                meta = inspect_image(candidate)
+                            elif bins is not None:
+                                meta = inspect_media(candidate, bins)
+                            else:
+                                raise RuntimeError("FFmpeg/FFprobe missing")
+                            found.append(meta)
+                        except Exception as exc:
+                            errors.append(f"{candidate.name}: {exc}")
+                self.signals.import_ready.emit(found, errors)
+
+            threading.Thread(
+                target=inspect_in_background,
+                name="PocketVideoMediaInspection",
+                daemon=True,
+            ).start()
+
+        def _on_import_ready(self, media: object, errors: object) -> None:
+            # All Qt widget mutations occur on the GUI thread.
+            try:
+                existing = {m.file_path.resolve() for m in self.controller.selected_files}
+                for item in media:
+                    if item.file_path.resolve() not in existing:
+                        self.controller.selected_files.append(item)
+                        existing.add(item.file_path.resolve())
+                self._refresh_selection_summary()
+                if errors:
+                    QtWidgets.QMessageBox.warning(
+                        self, "PocketVideo",
+                        self.controller.translator.t("import_error") +
+                        "\n" + "\n".join(errors[:12]),
+                    )
+            finally:
+                self._import_busy = False
+                self.drop_zone.btn_add_files.setEnabled(True)
+                self.drop_zone.btn_add_folder.setEnabled(True)
+                self.drop_zone.btn_clear.setEnabled(True)
+                self.btn_start_compress.setEnabled(True)
+                self._begin_next_import()
 
         def _preview_input_row(self, row: int, _column: int) -> None:
             cell = self.file_table.item(row, 1)
@@ -1415,21 +1488,14 @@ if PYSIDE6_AVAILABLE:
                 self, "Select Videos & Photos", "", f"Videos & Photos ({exts})"
             )
             if files:
-                _, errors = self.controller.add_files(files)
-                self._refresh_selection_summary()
-                if errors:
-                    QtWidgets.QMessageBox.warning(
-                        self, "PocketVideo",
-                        self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
-                    )
+                self._on_paths_dropped(files)
 
         def _prompt_add_folder(self) -> None:
-            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Media Folder")
+            folder = QtWidgets.QFileDialog.getExistingDirectory(
+                self, "Select Media Folder"
+            )
             if folder:
-                _, errors = self.controller.add_folder(folder)
-                self._refresh_selection_summary()
-                if errors:
-                    QtWidgets.QMessageBox.warning(self, "PocketVideo", "\n".join(errors[:12]))
+                self._on_paths_dropped([folder])
 
         def _clear_files(self) -> None:
             self.controller.clear_selected_files()
@@ -1522,6 +1588,7 @@ if PYSIDE6_AVAILABLE:
                 self.controller.settings.after_export_action = AfterExportAction(
                     self.after_action_combo.currentData()
                 ).value
+                self.controller.settings.skip_larger_outputs = self.skip_larger_check.isChecked()
                 self.controller.settings_mgr.save_settings()
                 self.image_quality_spin.setEnabled(
                     self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value

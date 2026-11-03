@@ -84,6 +84,7 @@ class AppSettings:
     filename_suffix: str = "_compressed"
     output_policy: str = OutputPolicy.KEEP_BOTH.value
     after_export_action: str = AfterExportAction.NONE.value
+    skip_larger_outputs: bool = False
     output_directory: str = field(default_factory=lambda: str(get_default_output_dir()))
     resource_mode: str = ResourceMode.BALANCED.value
     cpu_hard_cap_percent: int = 75
@@ -107,6 +108,7 @@ class AppSettings:
         self.cpu_threads = max(0, min(128, int(self.cpu_threads)))
         self.max_concurrent_jobs = max(1, min(8, int(self.max_concurrent_jobs)))
         self.image_quality = max(1, min(100, int(self.image_quality)))
+        self.skip_larger_outputs = bool(self.skip_larger_outputs)
         if self.default_image_format not in ("jpeg", "png", "webp", "heic", "avif"):
             self.default_image_format = "webp"
         if self.default_image_preset not in {p.value for p in ImagePreset}:

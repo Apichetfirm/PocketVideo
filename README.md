@@ -2,7 +2,7 @@
 
 **PocketVideo** is a free, open-source, 100% offline Windows 10/11 (x64) desktop application for converting and compressing mixed Android phone **videos and still photos**, including HEIC/HEIF when the bundled codec backend is present.
 
-> **v1.1.0 development:** Public v1.0.0 remains available at the Releases page. The code in this branch adds photo compression and safer outputs and is subject to Windows CI and license review before a public v1.1.0 release.
+> **Release status (v1.2.0 development):** The GitHub Releases page still contains v1.0.0; newer source builds require Windows CI plus binary-codec redistribution review before publishing. Source/PR merge does not automatically certify an official installer.
 
 > **Screenshot status:** The previews below were generated with a headless HTML renderer using actual FFmpeg test data. They illustrate the intended layout; they are **not** native Windows/PySide6 screenshots. Each Windows CI build also captures native Qt screenshots as a downloadable workflow artifact for review.
 
@@ -124,3 +124,14 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 - **Simpler dark/light UI:** removes unintended label background bands; consolidates the duplicated conversion navigation; reduces dashboard copy and imported-file table overflow. The existing five compression presets and image/video batch settings remain available.
 - **Compatibility:** Qt Multimedia supplies video playback. Codec support can vary with Windows/Qt codecs; if a source cannot be played, the app explains the error rather than claiming a successful comparison. FFmpeg frame inspection remains available for zoom.
 - v1.1.0 public binaries are not retroactively updated merely by merging; install a verified v1.1.1 Windows CI artifact when available. Review codec redistribution obligations before creating a new public release.
+
+## v1.2.0 — Reliability and Quality (development)
+
+- **Crash-resilient queue journal:** pending/in-progress jobs are saved locally, restored as *failed/interrupted*, and never run automatically after restart. Click **Retry Failed** after reconnecting and verifying source and destination disks. Completed results remain in History. The journal is not a guarantee of automatic recovery from filesystem corruption.
+- **USB/HDD interruption:** sample source and destination availability during video/image encoding; preserve the original and stop scheduling new jobs on storage failure. A source fingerprint is validated again before final promotion. File data is flushed before replacing any destination, and backups are retained for opt-in overwrite.
+- **Image CPU hard cap:** Pillow/HEIC encoding now runs in a separate child process that can be attached to Windows Job Objects. This also permits cancellation of an active image encode; import-time thumbnails and metadata decoding are not capped.
+- **Skip growing output (optional):** Enable in additional Export settings. For compression operations, if encoded output is not smaller, it is discarded and the original remains intact. Explicit format conversion is not blocked. Disabled by default because quality-priority encodes may legitimately grow.
+- **Nonblocking import:** Media inspection runs in background threads, so importing large folders does not freeze the desktop event loop.
+- **SSIM / VMAF when available:** The Before/After video player can compare a bounded 6-second, 640x360, 8fps sample. This is diagnostic rather than full-duration scoring, and VMAF requires `libvmaf` in FFmpeg.
+- **Queue cleanup:** Fixes stale Action-column index when results disappear.
+- **Release compliance:** Public GitHub Release publishing is gated behind `POCKETVIDEO_RELEASE_APPROVED=true` repository Actions variable and a manual checklist in `docs/DISTRIBUTION_COMPLIANCE.md`. A green CI build does not settle rights/patents.

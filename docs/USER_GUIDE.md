@@ -54,3 +54,11 @@
 
 ## 9. English Summary
 Mixed media: import photos and videos in one folder/queue and configure separate video/image profiles. Suffix and collision policy default to **Keep Both**. Explicit replace-original/output keeps backups; never manually delete your backups until you verify outputs. If external storage disconnects, reconnect and retry. Optional sleep/shutdown requires two confirmations and runs only after every verified job succeeded. CPU hard caps apply to FFmpeg subprocesses; Pillow image conversion runs in the app process.
+
+
+## v1.2.0: Reliability & Quality
+- งานที่ค้างก่อนปิดโปรแกรมจะถูกบันทึกไว้ และเมื่อเปิดใหม่จะอยู่ในสถานะหยุดชั่วคราว/ล้มเหลว ต้องกด **Retry Failed** เองหลังตรวจสอบไดรฟ์ USB/HDD แล้ว
+- เปิด **Skip larger outputs** ในการตั้งค่า Export เพิ่มเติมเพื่อไม่บันทึกผลบีบอัดที่ใหญ่กว่าต้นฉบับ (ใช้เฉพาะการบีบอัด ไม่ใช่การแปลงไฟล์)
+- คลิก **ตรวจคุณภาพ SSIM/VMAF** ในหน้าต่างเล่น Before/After เพื่อตรวจบางช่วงของวิดีโอ คะแนนไม่ได้แทนคุณภาพของทั้งไฟล์
+- โปรแกรมอ่านข้อมูลไฟล์ขนาดใหญ่ใน Background; งานรูปภาพเข้ารหัสผ่าน Process แยกเพื่อจำกัด CPU ได้
+- หลีกเลี่ยงการถอด HDD/USB ระหว่าง Export และควรใช้ **เก็บทั้งสองไฟล์** สำหรับวิดีโอที่สำคัญ

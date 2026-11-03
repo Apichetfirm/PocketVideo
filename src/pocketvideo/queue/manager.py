@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import os
+import sys
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,12 +17,14 @@ from typing import Callable, Optional
 from pocketvideo.core.models import (
     OutputPolicy,
     EncodingJobSpec,
+    OperationMode,
     JobProgress,
     JobResultComparison,
     JobStatus,
     MediaMetadata,
 )
 from pocketvideo.media.binaries import BinaryPaths, _get_CreationFlags
+from pocketvideo.queue.persistence import QueueJournal, serialize_spec
 from pocketvideo.media.encoder import (
     FFmpegProgressParser,
     PlannedEncodeExecution,
@@ -95,6 +99,10 @@ def build_safe_output_path(
     return candidate
 
 
+class LargerOutputSkipped(RuntimeError):
+    """User opted to preserve the smaller original instead of a larger output."""
+
+
 @dataclass
 class QueueItem:
     """State container for a single queued job."""
@@ -120,6 +128,7 @@ class QueueManager:
         on_job_updated: Optional[Callable[[QueueItem], None]] = None,
         on_queue_summary: Optional[Callable[[float, int, int], None]] = None,
         on_job_completed: Optional[Callable[[JobResultComparison], None]] = None,
+        journal_path: Optional[Path] = None,
     ) -> None:
         self.binaries = binaries
         self.work_dir = work_dir or Path(tempfile.gettempdir()) / "pocketvideo_work"
@@ -138,6 +147,41 @@ class QueueManager:
         self._scheduler_thread: Optional[threading.Thread] = None
         self._shutdown: bool = False
         self._storage_paused: bool = False
+        self._journal = QueueJournal(journal_path) if journal_path else None
+        self._journal_lock = threading.RLock()
+        self._last_journal_signature: tuple[tuple[str, str], ...] = ()
+        if self._journal:
+            # Restore specs only; never silently restart work on launch.
+            for spec in self._journal.load():
+                if spec.job_id in self._items:
+                    continue
+                item = QueueItem(spec=spec, status=JobStatus.FAILED,
+                                 error_message="Recovered interrupted job. Verify external drives, then choose Retry Failed.")
+                self._items[spec.job_id] = item
+                self._order.append(spec.job_id)
+            self._last_journal_signature = self._pending_signature()
+
+    def _pending_signature(self) -> tuple[tuple[str, str], ...]:
+        with self._lock:
+            return tuple((jid, self._items[jid].status.value)
+                         for jid in self._order
+                         if self._items[jid].status != JobStatus.COMPLETED)
+
+    def _persist_queue(self) -> None:
+        if not self._journal:
+            return
+        with self._journal_lock:
+            sig = self._pending_signature()
+            if sig == self._last_journal_signature:
+                return
+            with self._lock:
+                pending = [(self._items[jid].spec, self._items[jid].status.value)
+                           for jid, _ in sig]
+            try:
+                self._journal.save(pending)
+                self._last_journal_signature = sig
+            except OSError:
+                logger.exception("Could not save queue recovery journal")
 
     def set_max_concurrent_jobs(self, count: int) -> None:
         with self._lock:
@@ -335,7 +379,7 @@ class QueueManager:
                 raise
 
             if item.spec.media_kind == "image":
-                self._process_image_job(item, started_monotonic)
+                self._process_image_job(item, started_monotonic, resource_ctrl)
                 return
 
             plan = build_encode_plan(
@@ -391,22 +435,58 @@ class QueueManager:
                         target=_read_stderr, args=(proc.stderr, pass_stderr), daemon=True
                     )
                     stderr_thread.start()
+                    # Independent watchdog: the FFmpeg progress pipe may stop
+                    # producing lines when external storage disappears.
+                    drive_lost = threading.Event()
+                    watchdog_stop = threading.Event()
 
-                    assert proc.stdout is not None
-                    for out_line in proc.stdout:
-                        if job_id in self._cancel_flags:
+                    def monitor_storage() -> None:
+                        while not watchdog_stop.wait(1.0):
+                            if proc.poll() is not None:
+                                return
                             try:
-                                proc.terminate()
+                                available = (
+                                    item.spec.input_path.is_file()
+                                    and item.spec.output_path.parent.is_dir()
+                                )
                             except OSError:
-                                pass
-                            break
-                        prog = parser.feed_line(out_line)
-                        if prog:
-                            item.progress = prog
-                            self._notify_item(item)
+                                available = False
+                            if not available:
+                                self._storage_paused = True
+                                drive_lost.set()
+                                try:
+                                    proc.terminate()
+                                except OSError:
+                                    pass
+                                return
 
-                    proc.wait(timeout=30)
-                    stderr_thread.join(timeout=5)
+                    watchdog = threading.Thread(
+                        target=monitor_storage, name="PocketVideoStorageWatch",
+                        daemon=True,
+                    )
+                    watchdog.start()
+                    assert proc.stdout is not None
+                    try:
+                        for out_line in proc.stdout:
+                            if job_id in self._cancel_flags:
+                                try:
+                                    proc.terminate()
+                                except OSError:
+                                    pass
+                                break
+                            prog = parser.feed_line(out_line)
+                            if prog:
+                                item.progress = prog
+                                self._notify_item(item)
+                        proc.wait(timeout=30)
+                    finally:
+                        watchdog_stop.set()
+                        watchdog.join(timeout=2)
+                        stderr_thread.join(timeout=5)
+                    if drive_lost.is_set():
+                        raise StorageDisconnectedError(
+                            "USB/HDD disappeared during FFmpeg encoding."
+                        )
                     rc = proc.returncode
 
                 stderr_accum.extend(pass_stderr)
@@ -442,7 +522,13 @@ class QueueManager:
                         f"diverges from input ({item.input_metadata.duration_seconds:.1f}s)."
                     )
 
-            plan.final_output_path.parent.mkdir(parents=True, exist_ok=True)
+            if (item.spec.skip_larger_outputs
+                    and item.spec.operation_mode == OperationMode.COMPRESS
+                    and plan.temp_output_path.stat().st_size >= item.input_metadata.file_size_bytes):
+                raise LargerOutputSkipped(
+                    "Encoded output is not smaller than the original; kept source."
+                )
+            confirm_source(item.spec.input_path, item.spec.source_fingerprint)
             try:
                 actual_output_path, preserved_backup = promote_verified_output(
                     plan.temp_output_path, plan.final_output_path,
@@ -494,6 +580,11 @@ class QueueManager:
             if self.on_job_completed:
                 self.on_job_completed(comparison)
 
+        except LargerOutputSkipped as exc:
+            item.status = JobStatus.CANCELLED
+            item.error_message = str(exc)
+            item.warnings.append(str(exc))
+            self._notify_item(item)
         except InterruptedError:
             item.status = JobStatus.CANCELLED
             item.error_message = "Cancelled by user."
@@ -526,20 +617,81 @@ class QueueManager:
                 self._active_workers = max(0, self._active_workers - 1)
             self._notify_summary()
 
-    def _process_image_job(self, item: QueueItem, started_monotonic: float) -> None:
-        """Image work shares the exact same scheduler, queue and verification states."""
+    def _process_image_job(
+        self, item: QueueItem, started_monotonic: float,
+        resource_ctrl: ProcessResourceController,
+    ) -> None:
+        """Encode image in a child process so Windows CPU Job Object caps apply."""
         src = item.spec.input_path
         dst = item.spec.output_path
         staged = dst.with_name(f".pocketvideo_tmp_{item.spec.job_id}_{dst.name}")
         item.status = JobStatus.PROCESSING
         self._notify_item(item)
         try:
-            width, height, warnings = encode_image(item.spec, staged)
+            # Separate process allows real Windows CPU hard caps, Pause/Resume
+            # and Cancel for Pillow+libheif, rather than only FFmpeg videos.
+            task_file = self.work_dir / f"image_{item.spec.job_id}.json"
+            task_file.write_text(json.dumps(serialize_spec(item.spec)), encoding="utf-8")
+            try:
+                if getattr(sys, "frozen", False):
+                    command = [sys.executable, "--internal-image-job",
+                               str(task_file), str(staged)]
+                else:
+                    command = [sys.executable, "-m", "pocketvideo.main",
+                               "--internal-image-job", str(task_file), str(staged)]
+                with subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=_get_CreationFlags(),
+                ) as proc:
+                    with self._lock:
+                        self._processes[item.spec.job_id] = proc
+                        item.active_pid = proc.pid
+                    resource_ctrl.attach_to_process(proc)
+                    item.resource_summary = resource_ctrl.status_summary
+                    started = time.monotonic()
+                    while proc.poll() is None:
+                        if item.spec.job_id in self._cancel_flags:
+                            proc.terminate()
+                            raise InterruptedError("Image conversion cancelled.")
+                        if (not src.is_file() or not dst.parent.is_dir()):
+                            self._storage_paused = True
+                            proc.terminate()
+                            raise StorageDisconnectedError(
+                                "USB/HDD disconnected during image encoding."
+                            )
+                        if time.monotonic() - started > 900:
+                            proc.terminate()
+                            raise TimeoutError("Image encode exceeded 15-minute safety limit.")
+                        time.sleep(0.2)
+                    _out, err = proc.communicate(timeout=15)
+                    if proc.returncode != 0:
+                        raise RuntimeError(
+                            f"Image worker exited {proc.returncode}: {err[-1500:]}"
+                        )
+            finally:
+                try:
+                    task_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                with self._lock:
+                    self._processes.pop(item.spec.job_id, None)
+                    item.active_pid = None
+            # Verify image decode and geometry before final atomic promotion.
+            verified_image = inspect_image(staged)
+            width, height = verified_image.image_width, verified_image.image_height
+            warnings: list[str] = []
             item.status = JobStatus.VERIFYING
             item.warnings = warnings
             self._notify_item(item)
             if item.spec.job_id in self._cancel_flags:
                 raise InterruptedError("Image conversion cancelled.")
+            if (item.spec.skip_larger_outputs
+                    and item.spec.operation_mode == OperationMode.COMPRESS
+                    and staged.stat().st_size >= item.input_metadata.file_size_bytes):
+                raise LargerOutputSkipped(
+                    "Compressed image would be larger than the original; kept source."
+                )
             actual, backup = promote_verified_output(
                 staged, dst, src, item.spec.output_policy,
                 item.spec.source_fingerprint,
@@ -582,6 +734,7 @@ class QueueManager:
                 pass
 
     def _notify_item(self, item: QueueItem) -> None:
+        self._persist_queue()
         if self.on_job_updated:
             try:
                 self.on_job_updated(item)

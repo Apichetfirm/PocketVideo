@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import json
 from typing import Optional
 
 from pocketvideo import __app_name__, __version__
@@ -24,6 +25,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--version", action="version", version=f"{__app_name__} {__version__}")
     parser.add_argument("--cli-compress", nargs="+", help="Run batch compression in headless CLI mode")
+    parser.add_argument(
+        "--internal-image-job", nargs=2, metavar=("SPEC_JSON", "STAGED_IMAGE"),
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--verify-video-player", action="store_true",
         help="Smoke-test bundled Qt Multimedia playback widgets (CI utility)",
@@ -131,6 +136,12 @@ def verify_video_player() -> int:
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    if args.internal_image_job:
+        from pocketvideo.queue.persistence import deserialize_spec
+        from pocketvideo.media.images import encode_image
+        spec = deserialize_spec(json.loads(Path(args.internal_image_job[0]).read_text(encoding="utf-8")))
+        encode_image(spec, Path(args.internal_image_job[1]))
+        return 0
     if args.verify_video_player:
         return verify_video_player()
     if args.cli_compress:

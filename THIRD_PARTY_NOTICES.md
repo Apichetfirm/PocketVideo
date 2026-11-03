@@ -1,6 +1,6 @@
 # Third-Party Licenses & Source Availability Notices
 
-PocketVideo is licensed under the **GNU General Public License v3.0 or later (`GPL-3.0-or-later`)**, which is fully compatible with all bundled and linked open-source components listed below.
+PocketVideo source is licensed under **GNU GPL-3.0-or-later**. Bundled third-party libraries retain their own licenses; **redistribution compatibility has not been certified**. See the manual binary-release gate and dependency-by-dependency audit in `docs/DISTRIBUTION_COMPLIANCE.md`.
 
 ## 1. FFmpeg & FFprobe
 - **Website**: https://ffmpeg.org/
@@ -29,3 +29,16 @@ PocketVideo is licensed under the **GNU General Public License v3.0 or later (`G
 - pillow-heif 1.8.1: source BSD-3-Clause; **binary wheels GPLv2** due to bundled codec libraries.
 - The pillow-heif Windows wheel includes libheif (LGPLv3), libde265 (LGPLv3), x265 (GPLv2), and runtime support libraries. Distribution must include the applicable license texts, corresponding-source notices and GPL obligations; upstream list: https://github.com/bigcat88/pillow_heif/blob/master/LICENSES_bundled.txt
 - PocketVideo is already licensed GPL-3.0-or-later; do not remove the third-party license/source obligations when distributing the Installer or portable bundle. Review HEVC patent licensing separately before distributing in additional jurisdictions.
+
+
+## Distribution notice — REVIEW REQUIRED (2026-11-04)
+The current installer combines GPL-3.0-or-later PocketVideo source with a
+`pillow-heif==1.8.1` binary wheel. Upstream identifies wheel terms as GPLv2
+(due to x265), libheif and libde265 as LGPLv3, and includes MinGW libraries.
+Whether all of these exact binaries may be conveyed together depends on the
+actual component license grants (including possible GPLv2-or-later choices),
+corresponding-source offers, LGPL relinking rights, and local HEVC patents.
+This document does **not** assert those rights have been cleared.
+- Wheel attribution: https://github.com/bigcat88/pillow_heif/blob/v1.8.1/LICENSES_bundled.txt
+- GPL license compatibility: https://www.gnu.org/licenses/gpl-faq.html#v2v3Compatibility
+- See `docs/DISTRIBUTION_COMPLIANCE.md`. Do not tag a public release until reviewed.
