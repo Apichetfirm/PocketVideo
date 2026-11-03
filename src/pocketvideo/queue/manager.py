@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import os
+import sys
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,7 +23,7 @@ from pocketvideo.core.models import (
     MediaMetadata,
 )
 from pocketvideo.media.binaries import BinaryPaths, _get_CreationFlags
-from pocketvideo.queue.persistence import QueueJournal
+from pocketvideo.queue.persistence import QueueJournal, serialize_spec
 from pocketvideo.media.encoder import (
     FFmpegProgressParser,
     PlannedEncodeExecution,
@@ -376,7 +378,7 @@ class QueueManager:
                 raise
 
             if item.spec.media_kind == "image":
-                self._process_image_job(item, started_monotonic)
+                self._process_image_job(item, started_monotonic, resource_ctrl)
                 return
 
             plan = build_encode_plan(
@@ -567,15 +569,70 @@ class QueueManager:
                 self._active_workers = max(0, self._active_workers - 1)
             self._notify_summary()
 
-    def _process_image_job(self, item: QueueItem, started_monotonic: float) -> None:
-        """Image work shares the exact same scheduler, queue and verification states."""
+    def _process_image_job(
+        self, item: QueueItem, started_monotonic: float,
+        resource_ctrl: ProcessResourceController,
+    ) -> None:
+        """Encode image in a child process so Windows CPU Job Object caps apply."""
         src = item.spec.input_path
         dst = item.spec.output_path
         staged = dst.with_name(f".pocketvideo_tmp_{item.spec.job_id}_{dst.name}")
         item.status = JobStatus.PROCESSING
         self._notify_item(item)
         try:
-            width, height, warnings = encode_image(item.spec, staged)
+            # Separate process allows real Windows CPU hard caps, Pause/Resume
+            # and Cancel for Pillow+libheif, rather than only FFmpeg videos.
+            task_file = self.work_dir / f"image_{item.spec.job_id}.json"
+            task_file.write_text(json.dumps(serialize_spec(item.spec)), encoding="utf-8")
+            try:
+                if getattr(sys, "frozen", False):
+                    command = [sys.executable, "--internal-image-job",
+                               str(task_file), str(staged)]
+                else:
+                    command = [sys.executable, "-m", "pocketvideo.main",
+                               "--internal-image-job", str(task_file), str(staged)]
+                with subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, encoding="utf-8", errors="replace",
+                    creationflags=_get_CreationFlags(),
+                ) as proc:
+                    with self._lock:
+                        self._processes[item.spec.job_id] = proc
+                        item.active_pid = proc.pid
+                    resource_ctrl.attach_to_process(proc)
+                    item.resource_summary = resource_ctrl.status_summary
+                    started = time.monotonic()
+                    while proc.poll() is None:
+                        if item.spec.job_id in self._cancel_flags:
+                            proc.terminate()
+                            raise InterruptedError("Image conversion cancelled.")
+                        if (not src.is_file() or not dst.parent.is_dir()):
+                            self._storage_paused = True
+                            proc.terminate()
+                            raise StorageDisconnectedError(
+                                "USB/HDD disconnected during image encoding."
+                            )
+                        if time.monotonic() - started > 900:
+                            proc.terminate()
+                            raise TimeoutError("Image encode exceeded 15-minute safety limit.")
+                        time.sleep(0.2)
+                    _out, err = proc.communicate(timeout=15)
+                    if proc.returncode != 0:
+                        raise RuntimeError(
+                            f"Image worker exited {proc.returncode}: {err[-1500:]}"
+                        )
+            finally:
+                try:
+                    task_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                with self._lock:
+                    self._processes.pop(item.spec.job_id, None)
+                    item.active_pid = None
+            # Verify image decode and geometry before final atomic promotion.
+            verified_image = inspect_image(staged)
+            width, height = verified_image.image_width, verified_image.image_height
+            warnings: list[str] = []
             item.status = JobStatus.VERIFYING
             item.warnings = warnings
             self._notify_item(item)
