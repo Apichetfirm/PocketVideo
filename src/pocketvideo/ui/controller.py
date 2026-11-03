@@ -192,6 +192,24 @@ class AppController:
         discovered = discover_videos_in_folder(Path(folder), recursive=recursive)
         return self.add_files([str(p) for p in discovered])
 
+    def remove_selected_file(self, file_path: str | Path) -> bool:
+        """Remove an imported item from the selection without touching the source file."""
+        wanted = Path(file_path).resolve()
+        previous = len(self.selected_files)
+        self.selected_files = [m for m in self.selected_files if m.file_path.resolve() != wanted]
+        return len(self.selected_files) != previous
+
+    def set_output_directory(self, folder: str | Path, *, remember: bool = False) -> Path:
+        """Set the current output folder, optionally persisting it for future launches."""
+        candidate = Path(folder).expanduser().resolve()
+        if candidate.exists() and not candidate.is_dir():
+            raise ValueError("The output destination must be a folder, not a file.")
+        self.output_dir = candidate
+        if remember:
+            self.settings.output_directory = str(candidate)
+            self.settings_mgr.save_settings()
+        return candidate
+
     def clear_selected_files(self) -> None:
         self.selected_files.clear()
 

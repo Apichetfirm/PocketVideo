@@ -20,7 +20,9 @@ Implements:
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import tempfile
+import threading
 from typing import Optional
 
 try:
@@ -46,6 +48,7 @@ from pocketvideo.core.models import (
     ResourceMode,
 )
 from pocketvideo.media.presets import PRESET_CATALOG
+from pocketvideo.media.encoder import extract_representative_frame
 from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
@@ -58,6 +61,7 @@ if PYSIDE6_AVAILABLE:
         job_updated = Signal(object)
         queue_summary = Signal(float, int, int)
         job_completed = Signal(object)
+        preview_ready = Signal(str, str)
 
     class DragDropVideoZone(QtWidgets.QFrame):
         """Large drag-and-drop area accepting multiple video files or folders."""
@@ -235,6 +239,11 @@ if PYSIDE6_AVAILABLE:
             self.signals.job_updated.connect(self._on_job_updated_ui)
             self.signals.queue_summary.connect(self._on_queue_summary_ui)
             self.signals.job_completed.connect(self._on_job_completed_ui)
+            self.signals.preview_ready.connect(self._on_thumbnail_ready)
+            self._preview_semaphore = threading.Semaphore(2)
+            self._thumbnail_jobs: set[str] = set()
+            self._last_import_paths: tuple[str, ...] = ()
+            self._thumbnail_dir = Path(tempfile.gettempdir()) / "pocketvideo_previews"
 
             if self.controller.queue_manager:
                 self.controller.queue_manager.on_job_updated = self.signals.job_updated.emit
@@ -353,6 +362,27 @@ if PYSIDE6_AVAILABLE:
             self.file_summary_label.setObjectName("SubheadingLabel")
             self.file_summary_label.setWordWrap(True)
             v.addWidget(self.file_summary_label)
+
+            # The imported-file list is separate from the job queue. Removing an entry here
+            # never deletes its original file or cancels an already queued job.
+            self.file_table_title = QtWidgets.QLabel()
+            self.file_table_title.setObjectName("HeadingLabel")
+            v.addWidget(self.file_table_title)
+            self.file_table = QtWidgets.QTableWidget(0, 4)
+            self.file_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.file_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            self.file_table.verticalHeader().setVisible(False)
+            self.file_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            self.file_table.setColumnWidth(0, 100)
+            self.file_table.setMinimumHeight(140)
+            self.file_table.setMaximumHeight(310)
+            self.file_table.setIconSize(QtCore.QSize(88, 50))
+            self.file_table.cellDoubleClicked.connect(self._preview_input_row)
+            v.addWidget(self.file_table)
+            self.file_table_title.setVisible(False)
+            self.file_table.setVisible(False)
 
             self.warning_banner = QtWidgets.QLabel()
             self.warning_banner.setObjectName("WarningBanner")
@@ -686,6 +716,14 @@ if PYSIDE6_AVAILABLE:
             self.drop_zone.btn_add_folder.setText(t("btn_add_folder"))
             self.drop_zone.btn_clear.setText(t("btn_clear_selection"))
             self.drop_zone.btn_inspect.setText(t("btn_inspect_frames"))
+            self.file_table_title.setText(t("import_preview_header"))
+            self.file_table.setHorizontalHeaderLabels([
+                t("import_preview_col"), t("import_filename_col"),
+                t("import_info_col"), t("import_action_col"),
+            ])
+            # Refresh buttons after language changes even when the file list is unchanged.
+            self._last_import_paths = ()
+            self._refresh_imported_file_table()
 
             self.preset_section_label.setText(t("preset_section_title"))
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
@@ -798,6 +836,103 @@ if PYSIDE6_AVAILABLE:
                     self.controller.add_files([p])
             self._refresh_selection_summary()
 
+
+        def _preview_input_row(self, row: int, _column: int) -> None:
+            cell = self.file_table.item(row, 1)
+            if cell:
+                self._open_input_file(Path(str(cell.data(Qt.ItemDataRole.UserRole))))
+
+        def _open_input_file(self, path: Path) -> None:
+            """Ask Windows to open the existing original; never execute it as a command."""
+            if path.is_file():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
+        def _remove_imported_file(self, path: Path) -> None:
+            self.controller.remove_selected_file(path)
+            self._refresh_selection_summary()
+
+        def _refresh_imported_file_table(self) -> None:
+            files = self.controller.selected_files
+            keys = tuple(str(meta.file_path.resolve()) for meta in files)
+            self.file_table_title.setVisible(bool(files))
+            self.file_table.setVisible(bool(files))
+            if keys == self._last_import_paths:
+                return
+            self._last_import_paths = keys
+            self.file_table.setRowCount(len(files))
+            t = self.controller.translator.t
+            for row, media in enumerate(files):
+                path = media.file_path.resolve()
+                thumb = QtWidgets.QTableWidgetItem("🎞")
+                self.file_table.setItem(row, 0, thumb)
+                item = QtWidgets.QTableWidgetItem(path.name)
+                item.setToolTip(str(path))
+                item.setData(Qt.ItemDataRole.UserRole, str(path))
+                self.file_table.setItem(row, 1, item)
+                v = media.primary_video
+                details = f"{format_bytes(media.file_size_bytes)}"
+                if v:
+                    details += f" • {v.resolution_label} • {v.codec_name} • {v.fps:.1f}fps"
+                self.file_table.setItem(row, 2, QtWidgets.QTableWidgetItem(details))
+                actions = QtWidgets.QWidget()
+                buttons = QtWidgets.QHBoxLayout(actions)
+                buttons.setContentsMargins(2, 1, 2, 1)
+                open_btn = QtWidgets.QPushButton(t("import_open"))
+                remove_btn = QtWidgets.QPushButton(t("import_remove"))
+                open_btn.clicked.connect(lambda _checked=False, p=path: self._open_input_file(p))
+                remove_btn.clicked.connect(lambda _checked=False, p=path: self._remove_imported_file(p))
+                buttons.addWidget(open_btn)
+                buttons.addWidget(remove_btn)
+                self.file_table.setCellWidget(row, 3, actions)
+                self.file_table.setRowHeight(row, 58)
+                if self.controller.binaries:
+                    self._queue_thumbnail(media)
+
+        def _queue_thumbnail(self, media) -> None:
+            path = media.file_path.resolve()
+            try:
+                key = hashlib.sha256(f"{path}|{path.stat().st_mtime_ns}|{path.stat().st_size}".encode()).hexdigest()
+            except OSError:
+                return
+            target = self._thumbnail_dir / (key + ".png")
+            if target.exists():
+                self._on_thumbnail_ready(str(path), str(target))
+                return
+            if key in self._thumbnail_jobs:
+                return
+            self._thumbnail_jobs.add(key)
+
+            def worker() -> None:
+                try:
+                    with self._preview_semaphore:
+                        extract_representative_frame(
+                            path, target, self.controller.binaries,
+                            duration_seconds=media.duration_seconds,
+                        )
+                    self.signals.preview_ready.emit(str(path), str(target))
+                except Exception:
+                    pass  # Thumbnail failures must never prevent processing the input.
+                finally:
+                    self._thumbnail_jobs.discard(key)
+
+            threading.Thread(target=worker, name="PocketVideoThumbnail", daemon=True).start()
+
+        def _on_thumbnail_ready(self, original: str, image_path: str) -> None:
+            pixmap = QtGui.QPixmap(image_path)
+            if pixmap.isNull():
+                return
+            pixmap = pixmap.scaled(
+                88, 50, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            for row in range(self.file_table.rowCount()):
+                item = self.file_table.item(row, 1)
+                icon_cell = self.file_table.item(row, 0)
+                if item and icon_cell and item.data(Qt.ItemDataRole.UserRole) == original:
+                    icon_cell.setText("")
+                    icon_cell.setIcon(QtGui.QIcon(pixmap))
+                    break
+
         def _prompt_add_files(self) -> None:
             exts = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_VIDEO_EXTENSIONS))
             files, _ = QtWidgets.QFileDialog.getOpenFileNames(
@@ -825,6 +960,7 @@ if PYSIDE6_AVAILABLE:
 
         def _refresh_selection_summary(self) -> None:
             files = self.controller.selected_files
+            self._refresh_imported_file_table()
             if not files:
                 self.file_summary_label.setText("No videos selected yet.")
                 self.warning_banner.setVisible(False)
