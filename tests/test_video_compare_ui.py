@@ -79,5 +79,55 @@ class SynchronizedVideoDialogTests(unittest.TestCase):
                 app.processEvents()
 
 
+@unittest.skipUnless(PYSIDE6_AVAILABLE and HAS_MULTIMEDIA, "Qt Multimedia not installed")
+class MainWindowWiringTests(unittest.TestCase):
+    def test_completed_queue_opens_real_dual_player_and_selects_file_location(self):
+        from pocketvideo.core.models import JobResultComparison, OperationMode
+        from pocketvideo.ui.controller import AppController
+        from pocketvideo.ui.main_window import PocketVideoMainWindow
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "source.mp4"
+            result_path = Path(root) / "result.mp4"
+            backup = Path(root) / "backup.mp4"
+            for file in (source, result_path, backup):
+                file.write_bytes(b"video test")
+            comparison = JobResultComparison(
+                job_id="compare-1", input_path=source, output_path=result_path,
+                operation_mode=OperationMode.COMPRESS,
+                original_size_bytes=123, output_size_bytes=45,
+                space_saved_bytes=78, reduction_percent=63.4,
+                original_resolution="640x360", output_resolution="640x360",
+                original_codec="h264", output_codec="hevc",
+                processing_duration_seconds=1.2,
+                source_backup_path=backup,
+            )
+            controller = AppController()
+            controller.binaries = object()  # Only truthiness is used by this launch path.
+            window = PocketVideoMainWindow(controller)
+            try:
+                with mock.patch(
+                    "pocketvideo.ui.video_compare.SynchronizedVideoCompareDialog"
+                ) as player:
+                    window._show_completed_compare(comparison)
+                    player.assert_called_once()
+                    self.assertEqual(player.call_args.args[0], backup)
+                    self.assertEqual(player.call_args.args[1], result_path)
+                    player.return_value.exec.assert_called_once()
+                with mock.patch(
+                    "pocketvideo.ui.main_window.reveal_file_in_location"
+                ) as explorer:
+                    window._open_output_folder(comparison)
+                    explorer.assert_called_once_with(result_path)
+                self.assertTrue(window.btn_nav_convert.isHidden())
+                self.assertEqual(window.file_table.columnWidth(3), 146)
+                self.assertTrue(window.export_options.isHidden())
+                window.btn_toggle_export_options.setChecked(True)
+                self.assertFalse(window.export_options.isHidden())
+            finally:
+                window.close()
+                app.processEvents()
+
+
 if __name__ == "__main__":
     unittest.main()
