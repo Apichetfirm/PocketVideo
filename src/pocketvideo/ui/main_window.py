@@ -49,7 +49,6 @@ from pocketvideo.core.models import (
     OutputPolicy,
     AfterExportAction,
     ImagePreset,
-    JobStatus,
 )
 from pocketvideo.media.presets import PRESET_CATALOG
 from pocketvideo.media.encoder import extract_representative_frame
@@ -79,10 +78,10 @@ if PYSIDE6_AVAILABLE:
             super().__init__(parent)
             self.setObjectName("DropZoneFrame")
             self.setAcceptDrops(True)
-            self.setMinimumHeight(135)
+            self.setMinimumHeight(116)
 
             layout = QtWidgets.QVBoxLayout(self)
-            layout.setContentsMargins(20, 18, 20, 18)
+            layout.setContentsMargins(16, 10, 16, 10)
             layout.setSpacing(8)
             layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -443,7 +442,9 @@ if PYSIDE6_AVAILABLE:
             self.header_subtitle = QtWidgets.QLabel()
             self.header_subtitle.setObjectName("SubheadingLabel")
             v.addWidget(self.header_title)
-            v.addWidget(self.header_subtitle)
+            # The sidebar and drop zone already explain the product; avoid
+            # stacking a second marketing sentence above the work area.
+            self.header_subtitle.hide()
 
             # Drag and drop zone
             self.drop_zone = DragDropVideoZone()

@@ -31,12 +31,13 @@ class ZoomDetailDialog(QtWidgets.QDialog):
     frames_ready = Signal(str, str)
     frames_failed = Signal(str)
 
-    def __init__(self, before: Path, after: Path, binaries, position_ms: int, parent=None):
+    def __init__(self, before: Path, after: Path, binaries, position_ms: int, parent=None, before_offset_ms: int = 0):
         super().__init__(parent)
         self.before_path = Path(before)
         self.after_path = Path(after)
         self.binaries = binaries
         self.position_ms = max(0, int(position_ms))
+        self.before_offset_ms = max(0, int(before_offset_ms))
         self._scratch = tempfile.TemporaryDirectory(prefix="pocketvideo_detail_zoom_")
         self._generation = 0
         self.setWindowTitle("รายละเอียดภาพ • Before / After")
@@ -97,7 +98,7 @@ class ZoomDetailDialog(QtWidgets.QDialog):
                 else:
                     extract_representative_frame(
                         self.before_path, before_image, self.binaries,
-                        timestamp_seconds=timestamp,
+                        timestamp_seconds=timestamp + self.before_offset_ms / 1000.0,
                     )
                     extract_representative_frame(
                         self.after_path, after_image, self.binaries,
@@ -143,8 +144,9 @@ class ZoomDetailDialog(QtWidgets.QDialog):
 class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
     """Shared transport for simultaneous original and compressed playback."""
 
-    def __init__(self, before: Path, after: Path, binaries, parent=None):
+    def __init__(self, before: Path, after: Path, binaries, parent=None, before_offset_ms: int = 0):
         super().__init__(parent)
+        self.before_offset_ms = max(0, int(before_offset_ms))
         self.before_path = Path(before).resolve()
         self.after_path = Path(after).resolve()
         self.binaries = binaries
@@ -229,7 +231,11 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
     def _refresh_duration(self, *_args: object) -> None:
         durations = [p.duration() for p in self._players if p.duration() > 0]
         if durations:
-            max_ms = min(durations)
+            all_durations = [p.duration() for p in self._players]
+            if len(durations) == 2:
+                max_ms = min(max(0, all_durations[0] - self.before_offset_ms), all_durations[1])
+            else:
+                max_ms = max(0, durations[0] - self.before_offset_ms)
             self.seek_slider.setMaximum(max_ms)
             self.clock.setText(
                 f"{_duration_text(self.before_player.position())} / {_duration_text(max_ms)}"
@@ -238,6 +244,7 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
     def _sync_position(self, position: int) -> None:
         if self._seeking:
             return
+        position = max(0, position - self.before_offset_ms)
         if not self.seek_slider.isSliderDown():
             with QtCore.QSignalBlocker(self.seek_slider):
                 self.seek_slider.setValue(position)
@@ -266,8 +273,10 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
             self.play()
 
     def play(self) -> None:
-        position = self.before_player.position()
+        position = max(0, self.before_player.position() - self.before_offset_ms)
         self.after_player.setPosition(position)
+        if self.before_offset_ms and self.before_player.position() < self.before_offset_ms:
+            self.before_player.setPosition(self.before_offset_ms)
         self.after_player.play()
         self.before_player.play()
 
@@ -277,8 +286,8 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
 
     def seek_to(self, milliseconds: int) -> None:
         milliseconds = max(0, int(milliseconds))
-        for player in self._players:
-            player.setPosition(milliseconds)
+        self.before_player.setPosition(milliseconds + self.before_offset_ms)
+        self.after_player.setPosition(milliseconds)
 
     def _pause_seek(self) -> None:
         self._seeking = True
@@ -294,7 +303,8 @@ class SynchronizedVideoCompareDialog(QtWidgets.QDialog):
     def open_detail_zoom(self) -> None:
         dialog = ZoomDetailDialog(
             self.before_path, self.after_path, self.binaries,
-            self.before_player.position(), self,
+            max(0, self.before_player.position() - self.before_offset_ms), self,
+            before_offset_ms=self.before_offset_ms,
         )
         self._zoom_dialogs.append(dialog)
         dialog.finished.connect(lambda _code, d=dialog: self._forget_zoom(d))
