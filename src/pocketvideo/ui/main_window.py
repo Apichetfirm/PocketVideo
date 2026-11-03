@@ -86,18 +86,23 @@ if PYSIDE6_AVAILABLE:
             self.subtitle_label.setObjectName("SubheadingLabel")
             self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            btn_row = QtWidgets.QHBoxLayout()
-            btn_row.setSpacing(10)
+
+            # Use a 2x2 button grid so long Thai labels do not force the entire
+            # dashboard to scroll horizontally on 1366px laptops.
+            btn_row = QtWidgets.QGridLayout()
+            btn_row.setHorizontalSpacing(10)
+            btn_row.setVerticalSpacing(6)
             self.btn_add_files = QtWidgets.QPushButton()
             self.btn_add_folder = QtWidgets.QPushButton()
             self.btn_clear = QtWidgets.QPushButton()
             self.btn_inspect = QtWidgets.QPushButton()
-            btn_row.addStretch(1)
-            btn_row.addWidget(self.btn_add_files)
-            btn_row.addWidget(self.btn_add_folder)
-            btn_row.addWidget(self.btn_inspect)
-            btn_row.addWidget(self.btn_clear)
-            btn_row.addStretch(1)
+
+            btn_row.addWidget(self.btn_add_files, 0, 0)
+            btn_row.addWidget(self.btn_add_folder, 0, 1)
+            btn_row.addWidget(self.btn_inspect, 1, 0)
+            btn_row.addWidget(self.btn_clear, 1, 1)
+            btn_row.setColumnStretch(0, 1)
+            btn_row.setColumnStretch(1, 1)
 
             layout.addWidget(self.title_label)
             layout.addWidget(self.subtitle_label)
@@ -471,8 +476,15 @@ if PYSIDE6_AVAILABLE:
                 self.preset_cards[pid] = card
                 cards_row.addWidget(card, 1)
 
+
             self.preset_cards_widget = QtWidgets.QWidget()
             self.preset_cards_widget.setLayout(cards_row)
+            self.preset_cards_scroll = QtWidgets.QScrollArea()
+            self.preset_cards_scroll.setWidgetResizable(False)
+            self.preset_cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.preset_cards_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.preset_cards_scroll.setMinimumHeight(210)
+            self.preset_cards_scroll.setWidget(self.preset_cards_widget)
 
             # Interactive comparison table: a compact alternative to the existing cards.
             self.preset_comparison_title = QtWidgets.QLabel()
@@ -494,7 +506,8 @@ if PYSIDE6_AVAILABLE:
             # is the default, with all five original preset cards a tab away.
             self.preset_tabs = QtWidgets.QTabWidget()
             self.preset_tabs.addTab(self.preset_table, "")
-            self.preset_tabs.addTab(self.preset_cards_widget, "")
+
+            self.preset_tabs.addTab(self.preset_cards_scroll, "")
             v.addWidget(self.preset_tabs)
             prefs_row = QtWidgets.QHBoxLayout()
             self.pref_quality = QtWidgets.QCheckBox()
