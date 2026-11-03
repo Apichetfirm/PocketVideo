@@ -12,7 +12,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "app_title": "PocketVideo — โปรแกรมบีบอัดและแปลงไฟล์วิดีโอ",
         "app_subtitle": "ลดขนาดวิดีโอจากมือถือ Android อย่างฉลาด คงความคมชัดสูงสุด ทำงานในเครื่อง 100%",
         "nav_dashboard": "บีบอัดวิดีโอ",
-        "nav_convert": "แปลงนามสกุลไฟล์",
+        "nav_convert": "แปลงรูปแบบไฟล์",
         "nav_queue": "คิวงาน",
         "nav_history": "ประวัติการทำงาน",
         "nav_settings": "ตั้งค่า & ทรัพยากร",

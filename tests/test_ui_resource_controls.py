@@ -67,7 +67,11 @@ class UIResourceControlsTestSuite(unittest.TestCase):
                 window._on_preset_selected(PresetId.MAX_SPACE_SAVING)
                 self.assertEqual(controller.active_preset, PresetId.MAX_SPACE_SAVING)
                 self.assertEqual(window.preset_table.currentRow(), list(PresetId).index(PresetId.MAX_SPACE_SAVING))
+
                 self.assertEqual(window.preset_table.rowCount(), 5)
+                self.assertEqual(window.preset_tabs.currentIndex(), 0)
+                self.assertIn("QScrollArea", window.styleSheet())
+                self.assertIn("QTableWidget", window.styleSheet())
                 window.pref_quality.setChecked(True)
                 self.assertEqual(controller.active_preset, PresetId.BEST_QUALITY)
 
