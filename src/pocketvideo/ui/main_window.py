@@ -59,6 +59,7 @@ from pocketvideo.resources.post_export import run_after_export
 from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
+from pocketvideo.ui.file_actions import reveal_file_in_location
 
 
 if PYSIDE6_AVAILABLE:
@@ -183,63 +184,87 @@ if PYSIDE6_AVAILABLE:
             super().mousePressEvent(event)
 
     class BeforeAfterCompareDialog(QtWidgets.QDialog):
-        """Modal dialog showing representative before/after frames and short sample compression metrics."""
+        """Asynchronously generate a short sample, then compare two real videos."""
 
-        def __init__(
-            self,
-            controller: AppController,
-            parent: Optional[QtWidgets.QWidget] = None,
-        ) -> None:
+        sample_ready = Signal(str, int)
+        sample_failed = Signal(str)
+
+        def __init__(self, controller: AppController, parent=None) -> None:
             super().__init__(parent)
             self.controller = controller
-            self.setWindowTitle(self.controller.translator.t("btn_inspect_frames"))
-            self.resize(960, 580)
-
+            self._scratch = tempfile.TemporaryDirectory(prefix="pocketvideo_sample_")
+            self._busy = False
+            self.setWindowTitle("PocketVideo — ทดลองบีบอัดและเทียบวิดีโอ")
+            self.resize(520, 185)
             layout = QtWidgets.QVBoxLayout(self)
-            self.summary_label = QtWidgets.QLabel()
-            self.summary_label.setObjectName("SubheadingLabel")
+            self.summary_label = QtWidgets.QLabel(
+                "สร้างคลิปทดลอง 2.5 วินาที เพื่อเล่นต้นฉบับและไฟล์บีบอัดพร้อมกัน"
+            )
+            self.summary_label.setWordWrap(True)
             layout.addWidget(self.summary_label)
-
-            frames_row = QtWidgets.QHBoxLayout()
-            self.before_image = QtWidgets.QLabel("Original Frame")
-            self.before_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.before_image.setMinimumSize(440, 360)
-            self.after_image = QtWidgets.QLabel("Compressed Sample Frame")
-            self.after_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.after_image.setMinimumSize(440, 360)
-            frames_row.addWidget(self.before_image, 1)
-            frames_row.addWidget(self.after_image, 1)
-            layout.addLayout(frames_row, 1)
-
-            btn_run = QtWidgets.QPushButton("Generate 2.5s Sample & Compare Detail")
-            btn_run.setObjectName("PrimaryStartButton")
-            btn_run.clicked.connect(self._run_sample)
-            layout.addWidget(btn_run)
+            self.status_label = QtWidgets.QLabel("ไฟล์ต้นฉบับจะไม่ถูกเปลี่ยนแปลง")
+            self.status_label.setObjectName("MutedLabel")
+            layout.addWidget(self.status_label)
+            self.run_button = QtWidgets.QPushButton("▶ สร้างตัวอย่างและเปิดตัวเล่นคู่")
+            self.run_button.setObjectName("PrimaryStartButton")
+            self.run_button.clicked.connect(self._run_sample)
+            layout.addWidget(self.run_button)
+            self.sample_ready.connect(self._show_player)
+            self.sample_failed.connect(self._on_error)
 
         def _run_sample(self) -> None:
-            if not self.controller.selected_files:
+            media = next(
+                (m for m in self.controller.selected_files if m.media_kind == "video"), None
+            )
+            if media is None or self._busy:
                 return
-            media = self.controller.selected_files[0]
-            tmp_dir = Path(tempfile.gettempdir()) / "pocketvideo_preview"
+            self._busy = True
+            self.run_button.setEnabled(False)
+            self.status_label.setText("กำลังสร้างคลิปทดลองด้วย FFmpeg…")
+            source = media.file_path
+            offset_ms = int(
+                min(max(0.0, media.duration_seconds * 0.2),
+                    max(0.0, media.duration_seconds - 2.5)) * 1000
+            )
+            self._sample_source = source
+
+            def background() -> None:
+                try:
+                    video, _before_png, _after_png = self.controller.generate_before_after_preview(
+                        media, Path(self._scratch.name), sample_duration=2.5
+                    )
+                    self.sample_ready.emit(str(video), offset_ms)
+                except Exception as exc:
+                    self.sample_failed.emit(str(exc))
+
+            threading.Thread(target=background, name="PocketVideoSample", daemon=True).start()
+
+        def _show_player(self, sample_path: str, offset_ms: int) -> None:
+            self._busy = False
+            self.run_button.setEnabled(True)
+            self.status_label.setText("สร้างตัวอย่างเสร็จแล้ว")
+            from pocketvideo.ui.video_compare import SynchronizedVideoCompareDialog
             try:
-                sample_vid, before_png, after_png = self.controller.generate_before_after_preview(
-                    media, tmp_dir, sample_duration=2.5
+                dialog = SynchronizedVideoCompareDialog(
+                    self._sample_source, Path(sample_path), self.controller.binaries,
+                    self, before_offset_ms=offset_ms,
                 )
-                sample_size = sample_vid.stat().st_size
-                self.summary_label.setText(
-                    f"Source: {media.file_path.name} ({format_bytes(media.file_size_bytes)}) | "
-                    f"Sample Output ({sample_vid.name}): {format_bytes(sample_size)}"
-                )
-                pix_before = QtGui.QPixmap(str(before_png)).scaled(
-                    440, 360, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                pix_after = QtGui.QPixmap(str(after_png)).scaled(
-                    440, 360, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                self.before_image.setPixmap(pix_before)
-                self.after_image.setPixmap(pix_after)
-            except Exception as exc:
-                self.summary_label.setText(f"Preview error: {exc}")
+                dialog.exec()
+            except (OSError, RuntimeError) as exc:
+                self.status_label.setText(f"ตัวเล่นวิดีโอไม่พร้อม: {exc}")
+
+        def _on_error(self, error: str) -> None:
+            self._busy = False
+            self.run_button.setEnabled(True)
+            self.status_label.setText("สร้างตัวอย่างไม่สำเร็จ: " + error)
+
+        def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+            if self._busy:
+                event.ignore()
+                self.status_label.setText("กำลังสร้างตัวอย่าง ปิดได้เมื่อประมวลผลเสร็จ")
+                return
+            self._scratch.cleanup()
+            super().closeEvent(event)
 
     class CompletedVideoCompareDialog(QtWidgets.QDialog):
         """Compare aligned frames from the completed *real* source and output."""
@@ -1585,40 +1610,78 @@ if PYSIDE6_AVAILABLE:
                     actions = QtWidgets.QWidget()
                     actions_row = QtWidgets.QHBoxLayout(actions)
                     actions_row.setContentsMargins(1, 0, 1, 0)
-                    for title_key, callback in (
-                        ("queue_open", lambda r=result: self._open_output_file(r)),
-                        ("queue_folder", lambda r=result: self._open_output_folder(r)),
-                        ("queue_compare", lambda r=result: self._show_completed_compare(r)),
-                    ):
-                        btn = QtWidgets.QPushButton(self.controller.translator.t(title_key))
-                        btn.clicked.connect(lambda _checked=False, f=callback: f())
-                        actions_row.addWidget(btn)
+                    t = self.controller.translator.t
+                    # Keep the Open control compact but let the user choose
+                    # which distinct file to open: BEFORE or AFTER.
+                    open_btn = QtWidgets.QPushButton(t("queue_open") + " ▾")
+                    open_menu = QtWidgets.QMenu(open_btn)
+                    original = result.source_backup_path or result.input_path
+                    before_action = open_menu.addAction(
+                        "Before • ต้นฉบับ" if self.controller.translator.language == "th"
+                        else "Before • Original"
+                    )
+                    before_action.setEnabled(original.is_file())
+                    before_action.triggered.connect(
+                        lambda _checked=False, p=original: self._open_file_path(p)
+                    )
+                    after_action = open_menu.addAction(
+                        "After • ผลลัพธ์" if self.controller.translator.language == "th"
+                        else "After • Output"
+                    )
+                    after_action.setEnabled(result.output_path.is_file())
+                    after_action.triggered.connect(
+                        lambda _checked=False, p=result.output_path: self._open_file_path(p)
+                    )
+                    open_btn.setMenu(open_menu)
+                    actions_row.addWidget(open_btn)
+                    locate_btn = QtWidgets.QPushButton(t("queue_folder"))
+                    locate_btn.setToolTip("Open file location • เลือกไฟล์ผลลัพธ์ใน Explorer")
+                    locate_btn.clicked.connect(
+                        lambda _checked=False, r=result: self._open_output_folder(r)
+                    )
+                    actions_row.addWidget(locate_btn)
+                    compare_btn = QtWidgets.QPushButton(t("queue_compare"))
+                    compare_btn.clicked.connect(
+                        lambda _checked=False, r=result: self._show_completed_compare(r)
+                    )
+                    actions_row.addWidget(compare_btn)
                     self.queue_table.setCellWidget(row, 7, actions)
-                    self.queue_table.setColumnWidth(7, 330)
+                    self.queue_table.setColumnWidth(7, 310)
             elif self.queue_table.cellWidget(row, 7) is not None:
                 self.queue_table.removeCellWidget(row, 7)
 
+        def _open_file_path(self, path: Path) -> None:
+            if not path.is_file():
+                QtWidgets.QMessageBox.warning(
+                    self, "PocketVideo", "ไม่พบไฟล์ • ตรวจสอบไดรฟ์ USB/HDD"
+                )
+                return
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
         def _open_output_file(self, result: JobResultComparison) -> None:
-            if result.output_path.is_file():
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path)))
-            else:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output file is missing.")
+            self._open_file_path(result.output_path)
 
         def _open_output_folder(self, result: JobResultComparison) -> None:
-            if result.output_path.parent.is_dir():
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path.parent)))
-            else:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output folder is missing.")
+            try:
+                reveal_file_in_location(result.output_path)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
 
         def _show_completed_compare(self, result: JobResultComparison) -> None:
-            original_path = result.source_backup_path or result.input_path
-            if not original_path.is_file() or not result.output_path.is_file():
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Input or output file is missing.")
+            original = result.source_backup_path or result.input_path
+            if not original.is_file() or not result.output_path.is_file():
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "ไฟล์ Before/After ไม่อยู่แล้ว")
                 return
-            if not self.controller.binaries:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
-                return
-            dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            if original.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            else:
+                if not self.controller.binaries:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
+                    return
+                from pocketvideo.ui.video_compare import SynchronizedVideoCompareDialog
+                dlg = SynchronizedVideoCompareDialog(
+                    original, result.output_path, self.controller.binaries, self
+                )
             dlg.exec()
 
         def _find_or_create_job_row(self, job_id: str) -> int:
