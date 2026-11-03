@@ -875,12 +875,17 @@ if PYSIDE6_AVAILABLE:
             v.addLayout(ctrl_row)
 
 
-            self.queue_table = QtWidgets.QTableWidget(0, 8)
+            self.queue_table = QtWidgets.QTableWidget(0, 9)
             self.queue_table.setHorizontalHeaderLabels([
 
-                "Job ID", "File", "Status", "Progress", "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
+                "Job ID", "File", "Destination", "Status", "Progress",
+                "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
             ])
-            self.queue_table.horizontalHeader().setStretchLastSection(True)
+            # Destination sits next to the file name, so it remains useful
+            # even when many queue columns require horizontal scrolling.
+            self.queue_table.setColumnWidth(2, 295)
+            self.queue_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+            self.queue_table.horizontalHeader().setStretchLastSection(False)
             self.queue_table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
             )
@@ -1102,7 +1107,12 @@ if PYSIDE6_AVAILABLE:
             self.convert_help.setText(t("convert_explanation"))
 
             self.queue_title.setText(t("nav_queue"))
-            self.queue_table.setHorizontalHeaderItem(7, QtWidgets.QTableWidgetItem(t("queue_actions")))
+            self.queue_table.setHorizontalHeaderItem(
+                2, QtWidgets.QTableWidgetItem(t("queue_destination"))
+            )
+            self.queue_table.setHorizontalHeaderItem(
+                8, QtWidgets.QTableWidgetItem(t("queue_actions"))
+            )
             self.btn_pause_job.setText(t("queue_pause"))
             self.btn_resume_job.setText(t("queue_resume"))
             self.btn_cancel_job.setText(t("queue_cancel"))
@@ -1594,17 +1604,27 @@ if PYSIDE6_AVAILABLE:
             row = self._find_or_create_job_row(item.spec.job_id)
             self.queue_table.setItem(row, 0, QtWidgets.QTableWidgetItem(item.spec.job_id))
             self.queue_table.setItem(row, 1, QtWidgets.QTableWidgetItem(item.spec.input_path.name))
-            self.queue_table.setItem(row, 2, QtWidgets.QTableWidgetItem(item.status.value.upper()))
-            self.queue_table.setItem(row, 3, QtWidgets.QTableWidgetItem(f"{item.progress.percent:.1f}%"))
+            # Never read the mutable global output directory here: different
+            # jobs can be sent to entirely different drives. For completed
+            # work the verified final result also handles replace-original,
+            # where the staged spec path is not the true final filename.
+            export_path = item.result.output_path if item.result else item.spec.output_path
+            destination_folder = str(export_path.parent)
+            destination_item = QtWidgets.QTableWidgetItem(destination_folder)
+            destination_item.setToolTip(destination_folder)
+            destination_item.setData(Qt.ItemDataRole.UserRole, destination_folder)
+            self.queue_table.setItem(row, 2, destination_item)
+            self.queue_table.setItem(row, 3, QtWidgets.QTableWidgetItem(item.status.value.upper()))
+            self.queue_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{item.progress.percent:.1f}%"))
             self.queue_table.setItem(
-                row, 4, QtWidgets.QTableWidgetItem(f"{item.progress.fps:.1f} fps ({item.progress.speed_multiplier:.2f}x)")
+                row, 5, QtWidgets.QTableWidgetItem(
+                    f"{item.progress.fps:.1f} fps ({item.progress.speed_multiplier:.2f}x)"
+                )
             )
             self.queue_table.setItem(
-                row,
-                5,
-                QtWidgets.QTableWidgetItem(
+                row, 6, QtWidgets.QTableWidgetItem(
                     f"{format_duration(item.progress.elapsed_seconds)} / {format_duration(item.progress.eta_seconds)}"
-                ),
+                )
             )
             if item.result:
                 res_txt = (
@@ -1623,9 +1643,9 @@ if PYSIDE6_AVAILABLE:
             else:
                 res_txt = item.resource_summary
 
-            self.queue_table.setItem(row, 6, QtWidgets.QTableWidgetItem(res_txt))
+            self.queue_table.setItem(row, 7, QtWidgets.QTableWidgetItem(res_txt))
             if item.result and item.result.output_path.is_file():
-                if self.queue_table.cellWidget(row, 7) is None:
+                if self.queue_table.cellWidget(row, 8) is None:
                     result = item.result
                     actions = QtWidgets.QWidget()
                     actions_row = QtWidgets.QHBoxLayout(actions)
@@ -1665,10 +1685,10 @@ if PYSIDE6_AVAILABLE:
                         lambda _checked=False, r=result: self._show_completed_compare(r)
                     )
                     actions_row.addWidget(compare_btn)
-                    self.queue_table.setCellWidget(row, 7, actions)
-                    self.queue_table.setColumnWidth(7, 310)
+                    self.queue_table.setCellWidget(row, 8, actions)
+                    self.queue_table.setColumnWidth(8, 310)
             elif self.queue_table.cellWidget(row, 7) is not None:
-                self.queue_table.removeCellWidget(row, 7)
+                self.queue_table.removeCellWidget(row, 8)
 
         def _open_file_path(self, path: Path) -> None:
             if not path.is_file():
