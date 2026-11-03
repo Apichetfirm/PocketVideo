@@ -96,6 +96,7 @@ class AppController:
                 binaries=self.binaries,
                 work_dir=work_dir,
                 on_job_completed=self._on_job_completed,
+                journal_path=self.settings_mgr.base_dir / "queue.json",
             )
 
     def _limits_from_settings(self) -> ResourceLimits:

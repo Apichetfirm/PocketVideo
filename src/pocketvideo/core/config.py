@@ -107,6 +107,7 @@ class AppSettings:
         self.cpu_threads = max(0, min(128, int(self.cpu_threads)))
         self.max_concurrent_jobs = max(1, min(8, int(self.max_concurrent_jobs)))
         self.image_quality = max(1, min(100, int(self.image_quality)))
+        self.skip_larger_outputs = bool(self.skip_larger_outputs)
         if self.default_image_format not in ("jpeg", "png", "webp", "heic", "avif"):
             self.default_image_format = "webp"
         if self.default_image_preset not in {p.value for p in ImagePreset}:

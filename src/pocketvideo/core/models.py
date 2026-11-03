@@ -266,6 +266,7 @@ class EncodingJobSpec:
     image_quality: int = 82
     output_policy: OutputPolicy = OutputPolicy.KEEP_BOTH
     source_fingerprint: tuple[int, int, int, int] | None = None
+    skip_larger_outputs: bool = False
 
 
 @dataclass

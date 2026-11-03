@@ -21,6 +21,7 @@ from pocketvideo.core.models import (
     MediaMetadata,
 )
 from pocketvideo.media.binaries import BinaryPaths, _get_CreationFlags
+from pocketvideo.queue.persistence import QueueJournal
 from pocketvideo.media.encoder import (
     FFmpegProgressParser,
     PlannedEncodeExecution,
@@ -95,6 +96,10 @@ def build_safe_output_path(
     return candidate
 
 
+class LargerOutputSkipped(RuntimeError):
+    """User opted to preserve the smaller original instead of a larger output."""
+
+
 @dataclass
 class QueueItem:
     """State container for a single queued job."""
@@ -120,6 +125,7 @@ class QueueManager:
         on_job_updated: Optional[Callable[[QueueItem], None]] = None,
         on_queue_summary: Optional[Callable[[float, int, int], None]] = None,
         on_job_completed: Optional[Callable[[JobResultComparison], None]] = None,
+        journal_path: Optional[Path] = None,
     ) -> None:
         self.binaries = binaries
         self.work_dir = work_dir or Path(tempfile.gettempdir()) / "pocketvideo_work"
@@ -138,6 +144,41 @@ class QueueManager:
         self._scheduler_thread: Optional[threading.Thread] = None
         self._shutdown: bool = False
         self._storage_paused: bool = False
+        self._journal = QueueJournal(journal_path) if journal_path else None
+        self._journal_lock = threading.RLock()
+        self._last_journal_signature: tuple[tuple[str, str], ...] = ()
+        if self._journal:
+            # Restore specs only; never silently restart work on launch.
+            for spec in self._journal.load():
+                if spec.job_id in self._items:
+                    continue
+                item = QueueItem(spec=spec, status=JobStatus.FAILED,
+                                 error_message="Recovered interrupted job. Verify external drives, then choose Retry Failed.")
+                self._items[spec.job_id] = item
+                self._order.append(spec.job_id)
+            self._last_journal_signature = self._pending_signature()
+
+    def _pending_signature(self) -> tuple[tuple[str, str], ...]:
+        with self._lock:
+            return tuple((jid, self._items[jid].status.value)
+                         for jid in self._order
+                         if self._items[jid].status != JobStatus.COMPLETED)
+
+    def _persist_queue(self) -> None:
+        if not self._journal:
+            return
+        with self._journal_lock:
+            sig = self._pending_signature()
+            if sig == self._last_journal_signature:
+                return
+            with self._lock:
+                pending = [(self._items[jid].spec, self._items[jid].status.value)
+                           for jid, _ in sig]
+            try:
+                self._journal.save(pending)
+                self._last_journal_signature = sig
+            except OSError:
+                logger.exception("Could not save queue recovery journal")
 
     def set_max_concurrent_jobs(self, count: int) -> None:
         with self._lock:
@@ -582,6 +623,7 @@ class QueueManager:
                 pass
 
     def _notify_item(self, item: QueueItem) -> None:
+        self._persist_queue()
         if self.on_job_updated:
             try:
                 self.on_job_updated(item)

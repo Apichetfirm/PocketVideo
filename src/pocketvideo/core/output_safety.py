@@ -122,6 +122,11 @@ def promote_verified_output(
     ensure_storage(source, destination.parent)
     if not staged_file.is_file() or staged_file.stat().st_size <= 0:
         raise OSError("Verified output is missing; possible disk disconnect.")
+    # Best-effort flush file data before metadata promotion; required when
+    # replacing an original on an external drive. Cannot guarantee survival
+    # of faulty USB firmware or power loss without physical hardware testing.
+    with staged_file.open("rb") as handle:
+        os.fsync(handle.fileno())
 
     target = source if policy == OutputPolicy.REPLACE_SOURCE_BACKUP else destination
     if policy != OutputPolicy.REPLACE_SOURCE_BACKUP and target == source:
