@@ -20,7 +20,9 @@ Implements:
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import tempfile
+import threading
 from typing import Optional
 
 try:
@@ -44,8 +46,17 @@ from pocketvideo.core.models import (
     PresetId,
     ProcessPriority,
     ResourceMode,
+    OutputPolicy,
+    AfterExportAction,
+    ImagePreset,
+    JobStatus,
 )
 from pocketvideo.media.presets import PRESET_CATALOG
+from pocketvideo.media.encoder import extract_representative_frame
+from pocketvideo.media.images import (
+    SUPPORTED_IMAGE_EXTENSIONS, IMAGE_OUTPUT_FORMATS, thumbnail_png,
+)
+from pocketvideo.resources.post_export import run_after_export
 from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
@@ -58,6 +69,7 @@ if PYSIDE6_AVAILABLE:
         job_updated = Signal(object)
         queue_summary = Signal(float, int, int)
         job_completed = Signal(object)
+        preview_ready = Signal(str, str)
 
     class DragDropVideoZone(QtWidgets.QFrame):
         """Large drag-and-drop area accepting multiple video files or folders."""
@@ -82,18 +94,23 @@ if PYSIDE6_AVAILABLE:
             self.subtitle_label.setObjectName("SubheadingLabel")
             self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-            btn_row = QtWidgets.QHBoxLayout()
-            btn_row.setSpacing(10)
+
+            # Use a 2x2 button grid so long Thai labels do not force the entire
+            # dashboard to scroll horizontally on 1366px laptops.
+            btn_row = QtWidgets.QGridLayout()
+            btn_row.setHorizontalSpacing(10)
+            btn_row.setVerticalSpacing(6)
             self.btn_add_files = QtWidgets.QPushButton()
             self.btn_add_folder = QtWidgets.QPushButton()
             self.btn_clear = QtWidgets.QPushButton()
             self.btn_inspect = QtWidgets.QPushButton()
-            btn_row.addStretch(1)
-            btn_row.addWidget(self.btn_add_files)
-            btn_row.addWidget(self.btn_add_folder)
-            btn_row.addWidget(self.btn_inspect)
-            btn_row.addWidget(self.btn_clear)
-            btn_row.addStretch(1)
+
+            btn_row.addWidget(self.btn_add_files, 0, 0)
+            btn_row.addWidget(self.btn_add_folder, 0, 1)
+            btn_row.addWidget(self.btn_inspect, 1, 0)
+            btn_row.addWidget(self.btn_clear, 1, 1)
+            btn_row.setColumnStretch(0, 1)
+            btn_row.setColumnStretch(1, 1)
 
             layout.addWidget(self.title_label)
             layout.addWidget(self.subtitle_label)
@@ -225,6 +242,79 @@ if PYSIDE6_AVAILABLE:
             except Exception as exc:
                 self.summary_label.setText(f"Preview error: {exc}")
 
+    class CompletedVideoCompareDialog(QtWidgets.QDialog):
+        """Compare aligned frames from the completed *real* source and output."""
+
+        frames_ready = Signal(str, str)
+        frames_error = Signal(str)
+
+        def __init__(self, result: JobResultComparison, binaries, parent=None) -> None:
+            super().__init__(parent)
+            self.result = result
+            self.binaries = binaries
+            self._tmp = tempfile.TemporaryDirectory(prefix="pocketvideo_completed_compare_")
+            self.setWindowTitle("PocketVideo — Before / After")
+            self.resize(960, 580)
+            self.frames_ready.connect(self._display_frames)
+            self.frames_error.connect(self._display_error)
+
+            layout = QtWidgets.QVBoxLayout(self)
+            self.summary = QtWidgets.QLabel(
+                f"{result.input_path.name} • {format_bytes(result.original_size_bytes)} → "
+                f"{format_bytes(result.output_size_bytes)} • Saved {result.reduction_percent:.1f}%"
+            )
+            self.summary.setWordWrap(True)
+            layout.addWidget(self.summary)
+            self.status = QtWidgets.QLabel("Loading actual source/output frames…")
+            layout.addWidget(self.status)
+            frames = QtWidgets.QHBoxLayout()
+            self.source_frame = QtWidgets.QLabel("Before")
+            self.output_frame = QtWidgets.QLabel("After")
+            for frame in (self.source_frame, self.output_frame):
+                frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                frame.setMinimumSize(380, 280)
+                frame.setScaledContents(False)
+                frames.addWidget(frame, 1)
+            layout.addLayout(frames, 1)
+            QtCore.QTimer.singleShot(0, self._extract_frames_async)
+
+        def _extract_frames_async(self) -> None:
+            def worker() -> None:
+                try:
+                    original = Path(self._tmp.name) / "original.png"
+                    converted = Path(self._tmp.name) / "result.png"
+                    source_path = self.result.source_backup_path or self.result.input_path
+                    if source_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                        thumbnail_png(source_path, original, (840, 700))
+                        thumbnail_png(self.result.output_path, converted, (840, 700))
+                    else:
+                        extract_representative_frame(source_path, original, self.binaries)
+                        extract_representative_frame(self.result.output_path, converted, self.binaries)
+                    self.frames_ready.emit(str(original), str(converted))
+                except Exception as exc:
+                    self.frames_error.emit(str(exc))
+
+            threading.Thread(target=worker, name="PocketVideoCompare", daemon=True).start()
+
+        def _display_frames(self, original: str, converted: str) -> None:
+            for path, label in ((original, self.source_frame), (converted, self.output_frame)):
+                pixmap = QtGui.QPixmap(path)
+                if pixmap.isNull():
+                    self.status.setText("Cannot load the extracted frame.")
+                    return
+                label.setPixmap(pixmap.scaled(
+                    440, 360, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+            self.status.setText(
+                "Actual decoded images" if self.result.input_path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+                else "Actual decoded video frames — same timestamp (0.5s)"
+            )
+
+        def _display_error(self, message: str) -> None:
+            self.status.setText(message)
+
+
     class PocketVideoMainWindow(QtWidgets.QMainWindow):
         """Main desktop window for PocketVideo."""
 
@@ -235,6 +325,16 @@ if PYSIDE6_AVAILABLE:
             self.signals.job_updated.connect(self._on_job_updated_ui)
             self.signals.queue_summary.connect(self._on_queue_summary_ui)
             self.signals.job_completed.connect(self._on_job_completed_ui)
+            self.signals.preview_ready.connect(self._on_thumbnail_ready)
+            self._preview_semaphore = threading.Semaphore(2)
+            self._thumbnail_jobs: set[str] = set()
+            self._last_import_paths: tuple[str, ...] = ()
+            self._power_batch_ids: set[str] = set()
+            self._power_batch_action = AfterExportAction.NONE
+            self._power_prompt_pending = False
+            self._power_verified_outputs: list[Path] = []
+            self._usb_error_alerted: set[str] = set()
+            self._thumbnail_dir = Path(tempfile.gettempdir()) / "pocketvideo_previews"
 
             if self.controller.queue_manager:
                 self.controller.queue_manager.on_job_updated = self.signals.job_updated.emit
@@ -354,6 +454,27 @@ if PYSIDE6_AVAILABLE:
             self.file_summary_label.setWordWrap(True)
             v.addWidget(self.file_summary_label)
 
+            # The imported-file list is separate from the job queue. Removing an entry here
+            # never deletes its original file or cancels an already queued job.
+            self.file_table_title = QtWidgets.QLabel()
+            self.file_table_title.setObjectName("HeadingLabel")
+            v.addWidget(self.file_table_title)
+            self.file_table = QtWidgets.QTableWidget(0, 4)
+            self.file_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.file_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            self.file_table.verticalHeader().setVisible(False)
+            self.file_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+            self.file_table.setColumnWidth(0, 100)
+            self.file_table.setMinimumHeight(140)
+            self.file_table.setMaximumHeight(310)
+            self.file_table.setIconSize(QtCore.QSize(88, 50))
+            self.file_table.cellDoubleClicked.connect(self._preview_input_row)
+            v.addWidget(self.file_table)
+            self.file_table_title.setVisible(False)
+            self.file_table.setVisible(False)
+
             self.warning_banner = QtWidgets.QLabel()
             self.warning_banner.setObjectName("WarningBanner")
             self.warning_banner.setWordWrap(True)
@@ -375,7 +496,57 @@ if PYSIDE6_AVAILABLE:
                 card.clicked.connect(self._on_preset_selected)
                 self.preset_cards[pid] = card
                 cards_row.addWidget(card, 1)
-            v.addLayout(cards_row)
+
+
+            self.preset_cards_widget = QtWidgets.QWidget()
+            self.preset_cards_widget.setLayout(cards_row)
+            self.preset_cards_scroll = QtWidgets.QScrollArea()
+            self.preset_cards_scroll.setWidgetResizable(False)
+            self.preset_cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.preset_cards_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.preset_cards_scroll.setMinimumHeight(210)
+            self.preset_cards_scroll.setWidget(self.preset_cards_widget)
+
+            # Interactive comparison table: a compact alternative to the existing cards.
+            self.preset_comparison_title = QtWidgets.QLabel()
+            self.preset_comparison_title.setObjectName("HeadingLabel")
+            v.addWidget(self.preset_comparison_title)
+            self.preset_table = QtWidgets.QTableWidget(len(PresetId), 4)
+            self.preset_table.verticalHeader().setVisible(False)
+            self.preset_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.preset_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            self.preset_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+            self.preset_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+            self.preset_table.setMinimumHeight(180)
+            self.preset_table.setMaximumHeight(225)
+            self.preset_table.cellClicked.connect(
+                lambda row, _col: self._on_preset_selected(list(PresetId)[row])
+            )
+
+            # Show only one presentation at a time: the short comparison table
+            # is the default, with all five original preset cards a tab away.
+            self.preset_tabs = QtWidgets.QTabWidget()
+            self.preset_tabs.addTab(self.preset_table, "")
+
+            self.preset_tabs.addTab(self.preset_cards_scroll, "")
+            v.addWidget(self.preset_tabs)
+            prefs_row = QtWidgets.QHBoxLayout()
+            self.pref_quality = QtWidgets.QCheckBox()
+            self.pref_size = QtWidgets.QCheckBox()
+            self.pref_speed = QtWidgets.QCheckBox()
+            for p in (self.pref_quality, self.pref_size, self.pref_speed):
+                prefs_row.addWidget(p)
+                p.toggled.connect(self._on_preferences_changed)
+            prefs_row.addStretch(1)
+            v.addLayout(prefs_row)
+            self.preference_message = QtWidgets.QLabel()
+            self.preference_message.setObjectName("MutedLabel")
+            self.preference_message.setWordWrap(True)
+            v.addWidget(self.preference_message)
+            self.encoding_details_label = QtWidgets.QLabel()
+            self.encoding_details_label.setObjectName("SubheadingLabel")
+            self.encoding_details_label.setWordWrap(True)
+            v.addWidget(self.encoding_details_label)
 
             # Custom Target Size Bar (Preset E)
             self.target_size_frame = QtWidgets.QFrame()
@@ -418,23 +589,101 @@ if PYSIDE6_AVAILABLE:
                 self.format_combo.addItem(fmt.upper(), fmt)
             self.format_combo.currentIndexChanged.connect(self._on_format_changed)
 
+
+            self.operation_label = QtWidgets.QLabel()
+            self.operation_combo = QtWidgets.QComboBox()
+            self.operation_combo.addItem("", "compress")
+            self.operation_combo.addItem("", "convert")
+            self.operation_combo.addItem("", "both")
+            self.operation_combo.currentIndexChanged.connect(self._on_operation_changed)
+
             self.lbl_out_dir = QtWidgets.QLabel()
             self.out_dir_edit = QtWidgets.QLineEdit(str(self.controller.output_dir))
             self.btn_browse_out = QtWidgets.QPushButton()
+
             self.btn_browse_out.clicked.connect(self._browse_output_dir)
+            self.btn_save_out_default = QtWidgets.QPushButton()
+            self.btn_save_out_default.clicked.connect(self._save_default_folder)
+            self.out_dir_edit.editingFinished.connect(self._sync_current_output_directory)
+
+
+            # Independent still-image format/quality controls work in mixed
+            # batches without changing the selected VIDEO preset.
+            self.lbl_image_format = QtWidgets.QLabel()
+            self.image_format_combo = QtWidgets.QComboBox()
+            for ext in IMAGE_OUTPUT_FORMATS:
+                self.image_format_combo.addItem(ext.upper(), ext)
+            self.image_format_combo.setCurrentIndex(
+                max(0, self.image_format_combo.findData(self.controller.image_output_format))
+            )
+            self.image_format_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+
+            self.lbl_image_preset = QtWidgets.QLabel()
+            self.image_preset_combo = QtWidgets.QComboBox()
+            for profile in ImagePreset:
+                self.image_preset_combo.addItem("", profile.value)
+            self.image_preset_combo.setCurrentIndex(
+                max(0, self.image_preset_combo.findData(self.controller.image_preset.value))
+            )
+            self.image_preset_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.lbl_image_quality = QtWidgets.QLabel()
+            self.image_quality_spin = QtWidgets.QSpinBox()
+            self.image_quality_spin.setRange(1, 100)
+            self.image_quality_spin.setValue(self.controller.image_quality)
+            self.image_quality_spin.valueChanged.connect(self._on_output_preferences_changed)
+
+            self.lbl_suffix = QtWidgets.QLabel()
+            self.suffix_edit = QtWidgets.QLineEdit(self.controller.filename_suffix)
+            self.suffix_edit.setMaxLength(48)
+            self.suffix_edit.editingFinished.connect(self._on_output_preferences_changed)
+            self.lbl_collision = QtWidgets.QLabel()
+            self.output_policy_combo = QtWidgets.QComboBox()
+            for policy in OutputPolicy:
+                self.output_policy_combo.addItem("", policy.value)
+            self.output_policy_combo.setCurrentIndex(
+                max(0, self.output_policy_combo.findData(self.controller.output_policy.value))
+            )
+            self.output_policy_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.lbl_after = QtWidgets.QLabel()
+            self.after_action_combo = QtWidgets.QComboBox()
+            for action in AfterExportAction:
+                self.after_action_combo.addItem("", action.value)
+            self.after_action_combo.setCurrentIndex(
+                max(0, self.after_action_combo.findData(
+                    self.controller.settings.after_export_action))
+            )
+            self.after_action_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
 
             self.btn_start_compress = QtWidgets.QPushButton()
             self.btn_start_compress.setObjectName("PrimaryStartButton")
             self.btn_start_compress.clicked.connect(self._start_compression_batch)
 
-            b_layout.addWidget(self.lbl_compat, 0, 0)
-            b_layout.addWidget(self.compat_combo, 0, 1)
-            b_layout.addWidget(self.lbl_format, 0, 2)
-            b_layout.addWidget(self.format_combo, 0, 3)
-            b_layout.addWidget(self.lbl_out_dir, 1, 0)
-            b_layout.addWidget(self.out_dir_edit, 1, 1, 1, 2)
-            b_layout.addWidget(self.btn_browse_out, 1, 3)
-            b_layout.addWidget(self.btn_start_compress, 2, 0, 1, 4)
+
+            b_layout.addWidget(self.operation_label, 0, 0)
+            b_layout.addWidget(self.operation_combo, 0, 1, 1, 3)
+            b_layout.addWidget(self.lbl_compat, 1, 0)
+
+            b_layout.addWidget(self.compat_combo, 1, 1)
+            b_layout.addWidget(self.lbl_format, 1, 2)
+            b_layout.addWidget(self.format_combo, 1, 3)
+
+            b_layout.addWidget(self.lbl_image_format, 2, 0)
+            b_layout.addWidget(self.image_format_combo, 2, 1)
+            b_layout.addWidget(self.lbl_image_preset, 2, 2)
+            b_layout.addWidget(self.image_preset_combo, 2, 3)
+            b_layout.addWidget(self.lbl_image_quality, 3, 0)
+            b_layout.addWidget(self.image_quality_spin, 3, 1)
+            b_layout.addWidget(self.lbl_suffix, 4, 0)
+            b_layout.addWidget(self.suffix_edit, 4, 1)
+            b_layout.addWidget(self.lbl_collision, 4, 2)
+            b_layout.addWidget(self.output_policy_combo, 4, 3)
+            b_layout.addWidget(self.lbl_out_dir, 5, 0)
+            b_layout.addWidget(self.out_dir_edit, 5, 1, 1, 2)
+            b_layout.addWidget(self.btn_browse_out, 5, 3)
+            b_layout.addWidget(self.btn_save_out_default, 6, 1, 1, 3)
+            b_layout.addWidget(self.lbl_after, 7, 0)
+            b_layout.addWidget(self.after_action_combo, 7, 1, 1, 3)
+            b_layout.addWidget(self.btn_start_compress, 8, 0, 1, 4)
             v.addWidget(bottom_card)
 
             # Expandable Advanced Settings Panel
@@ -517,8 +766,13 @@ if PYSIDE6_AVAILABLE:
 
             self.btn_start_convert = QtWidgets.QPushButton()
             self.btn_start_convert.setObjectName("PrimaryStartButton")
-            self.btn_start_convert.clicked.connect(self._start_conversion_batch)
 
+            self.btn_start_convert.clicked.connect(self._go_to_convert_on_main)
+
+
+            self.convert_help = QtWidgets.QLabel()
+            self.convert_help.setWordWrap(True)
+            cv.addWidget(self.convert_help)
             cv.addWidget(self.chk_smart_remux)
             cv.addWidget(self.convert_mode_banner)
             cv.addWidget(self.btn_start_convert)
@@ -564,9 +818,11 @@ if PYSIDE6_AVAILABLE:
             ctrl_row.addStretch(1)
             v.addLayout(ctrl_row)
 
-            self.queue_table = QtWidgets.QTableWidget(0, 7)
+
+            self.queue_table = QtWidgets.QTableWidget(0, 8)
             self.queue_table.setHorizontalHeaderLabels([
-                "Job ID", "File", "Status", "Progress", "FPS / Speed", "Elapsed / ETA", "Summary / Result"
+
+                "Job ID", "File", "Status", "Progress", "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
             ])
             self.queue_table.horizontalHeader().setStretchLastSection(True)
             self.queue_table.setSelectionBehavior(
@@ -617,11 +873,12 @@ if PYSIDE6_AVAILABLE:
             self.res_mode_combo.addItem("Custom", ResourceMode.CUSTOM.value)
             self.res_mode_combo.currentIndexChanged.connect(self._on_resource_mode_changed)
 
-            self.cpu_cap_spin = QtWidgets.QSpinBox()
-            self.cpu_cap_spin.setRange(10, 100)
-            self.cpu_cap_spin.setSuffix("% (Windows Job Object Hard Cap)")
-            self.cpu_cap_spin.setValue(self.controller.resource_limits.cpu_hard_cap_percent)
-            self.cpu_cap_spin.valueChanged.connect(self._on_resource_controls_edited)
+
+            self.cpu_cap_combo = QtWidgets.QComboBox()
+            for cap in (50, 60, 70, 75, 80, 85, 90, 95, 100):
+                self.cpu_cap_combo.addItem(f"{cap}%", cap)
+            self._set_cpu_cap_selection(self.controller.resource_limits.cpu_hard_cap_percent)
+            self.cpu_cap_combo.currentIndexChanged.connect(self._on_resource_controls_edited)
 
             self.threads_spin = QtWidgets.QSpinBox()
             self.threads_spin.setRange(0, 64)
@@ -651,7 +908,8 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(QtWidgets.QLabel("Resource Mode:"), 0, 0)
             grid.addWidget(self.res_mode_combo, 0, 1)
             grid.addWidget(QtWidgets.QLabel("CPU Hard Cap (%):"), 1, 0)
-            grid.addWidget(self.cpu_cap_spin, 1, 1)
+
+            grid.addWidget(self.cpu_cap_combo, 1, 1)
             grid.addWidget(QtWidgets.QLabel("CPU Thread Count (0=Auto):"), 2, 0)
             grid.addWidget(self.threads_spin, 2, 1)
             grid.addWidget(QtWidgets.QLabel("Concurrent Jobs:"), 3, 0)
@@ -686,9 +944,42 @@ if PYSIDE6_AVAILABLE:
             self.drop_zone.btn_add_folder.setText(t("btn_add_folder"))
             self.drop_zone.btn_clear.setText(t("btn_clear_selection"))
             self.drop_zone.btn_inspect.setText(t("btn_inspect_frames"))
+            self.file_table_title.setText(t("import_preview_header"))
+            self.file_table.setHorizontalHeaderLabels([
+                t("import_preview_col"), t("import_filename_col"),
+                t("import_info_col"), t("import_action_col"),
+            ])
+            # Refresh buttons after language changes even when the file list is unchanged.
+            self._last_import_paths = ()
+            self._refresh_imported_file_table()
 
             self.preset_section_label.setText(t("preset_section_title"))
+
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
+
+            self.preset_comparison_title.setText(t("preset_comparison_title"))
+            self.preset_tabs.setTabText(0, "ตารางเปรียบเทียบ" if self.controller.translator.language == "th" else "Comparison Table")
+            self.preset_tabs.setTabText(1, "Preset แบบเดิม" if self.controller.translator.language == "th" else "Preset Cards")
+            self.preset_table.setHorizontalHeaderLabels([
+                t("preset_col_name"), t("preset_col_size"),
+                t("preset_col_speed"), t("preset_col_quality"),
+            ])
+            matrix = [
+                ("preset_a_title", ("น้อย–ปานกลาง", "ช้า", "ดีมาก"), ("Low–medium", "Slow", "Excellent")),
+                ("preset_b_title", ("ปานกลาง–มาก", "ช้า", "ดี"), ("Medium–high", "Slow", "Good")),
+                ("preset_c_title", ("มาก", "ช้ามาก", "ลดลงบ้าง"), ("High", "Very slow", "Some quality loss")),
+                ("preset_d_title", ("ปานกลาง", "เร็ว", "ปานกลาง–ดี"), ("Medium", "Fast", "Fair–good")),
+                ("preset_e_title", ("ตามที่กำหนด", "ช้า (2-Pass)", "ขึ้นกับขนาดเป้าหมาย"), ("Target-based", "Slow (2-pass)", "Depends on target")),
+            ]
+            for row, (key, thai, english) in enumerate(matrix):
+                values = (t(key), *(thai if self.controller.translator.language == "th" else english))
+                for col, value in enumerate(values):
+                    self.preset_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+            self.pref_quality.setText(t("pref_quality"))
+            self.pref_size.setText(t("pref_size"))
+            self.pref_speed.setText(t("pref_speed"))
+            self.preference_message.setText(t("pref_info"))
+            self._refresh_encoding_details()
 
             for pid, card in self.preset_cards.items():
                 desc = PRESET_CATALOG[pid]
@@ -702,14 +993,49 @@ if PYSIDE6_AVAILABLE:
             self.compat_combo.setItemText(0, t("compat_modern_android"))
             self.compat_combo.setItemText(1, t("compat_max_compatibility"))
             self.lbl_format.setText(t("label_output_format"))
+
             self.lbl_out_dir.setText(t("label_output_folder"))
+            self.btn_save_out_default.setText(t("btn_default_folder"))
+            self.operation_label.setText(t("operation_label"))
+            self.operation_combo.setItemText(0, t("operation_compress"))
+            self.operation_combo.setItemText(1, t("operation_convert"))
+            self.operation_combo.setItemText(2, t("operation_both"))
             self.btn_browse_out.setText(t("btn_browse_output"))
+
+            self.lbl_image_format.setText(t("image_format_label"))
+            self.lbl_image_preset.setText(t("image_profile_label"))
+            self.lbl_image_quality.setText(t("image_quality_label"))
+            for row, key in enumerate(
+                ("image_quality_best", "image_quality_balanced", "image_quality_small",
+                 "image_quality_fast", "image_quality_custom")
+            ):
+                self.image_preset_combo.setItemText(row, t(key))
+            self.lbl_suffix.setText(t("filename_suffix_label"))
+            self.lbl_collision.setText(t("output_policy_label"))
+            for row, key in enumerate(
+                ("output_policy_keep", "output_policy_skip", "output_policy_replace_target",
+                 "output_policy_replace_source")
+            ):
+                self.output_policy_combo.setItemText(row, t(key))
+            self.lbl_after.setText(t("after_export_label"))
+            for row, key in enumerate(
+                ("after_export_none", "after_export_sleep", "after_export_shutdown")
+            ):
+                self.after_action_combo.setItemText(row, t(key))
+            self.image_quality_spin.setEnabled(
+                self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
+            )
             self.btn_start_compress.setText(t("btn_start_compress"))
+            self._on_operation_changed()
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
 
             self.convert_title.setText(t("nav_convert"))
-            self.btn_start_convert.setText(t("btn_start_convert"))
+
+            self.btn_start_convert.setText(t("convert_go_dashboard"))
+            self.convert_help.setText(t("convert_explanation"))
+
             self.queue_title.setText(t("nav_queue"))
+            self.queue_table.setHorizontalHeaderItem(7, QtWidgets.QTableWidgetItem(t("queue_actions")))
             self.btn_pause_job.setText(t("queue_pause"))
             self.btn_resume_job.setText(t("queue_resume"))
             self.btn_cancel_job.setText(t("queue_cancel"))
@@ -743,30 +1069,94 @@ if PYSIDE6_AVAILABLE:
             self.apply_theme(next_theme)
             self.retranslate_ui()
 
-        def _on_preset_selected(self, preset_id: PresetId) -> None:
+
+        def _on_preset_selected(self, preset_id: PresetId, *, from_preferences: bool = False) -> None:
             self.controller.active_preset = preset_id
+            if not from_preferences:
+                for preference in (self.pref_quality, self.pref_size, self.pref_speed):
+                    with QtCore.QSignalBlocker(preference):
+                        preference.setChecked(False)
+                self.preference_message.setText(self.controller.translator.t("pref_info"))
+            with QtCore.QSignalBlocker(self.preset_table):
+                self.preset_table.selectRow(list(PresetId).index(preset_id))
+            self._refresh_encoding_details()
             for pid, card in self.preset_cards.items():
                 card.set_selected(pid == preset_id)
             self.target_size_frame.setVisible(preset_id == PresetId.CUSTOM_SIZE)
             self._refresh_selection_summary()
 
+
+        def _on_preferences_changed(self, *_args: object) -> None:
+            quality = self.pref_quality.isChecked()
+            small = self.pref_size.isChecked()
+            speed = self.pref_speed.isChecked()
+            if not (quality or small or speed):
+                self.preference_message.setText(self.controller.translator.t("pref_info"))
+                return
+            if small and quality:
+                recommended = PresetId.BEST_BALANCE
+            elif speed:
+                recommended = PresetId.FASTEST
+            elif small:
+                recommended = PresetId.MAX_SPACE_SAVING
+            else:
+                recommended = PresetId.BEST_QUALITY
+            self._on_preset_selected(recommended, from_preferences=True)
+            self.preference_message.setText(
+                self.controller.translator.t("pref_conflict")
+                if sum((quality, small, speed)) > 1
+                else self.controller.translator.t("preset_comparison_hint")
+            )
+
+        def _refresh_encoding_details(self) -> None:
+            if not hasattr(self, "encoding_details_label"):
+                return
+            p = PRESET_CATALOG[self.controller.active_preset]
+            if p.uses_two_pass:
+                detail = f"2-Pass • Target {self.controller.target_size_mb:g} MB • size not exact"
+            else:
+                crf = (p.default_crf_h265 if self.controller.compatibility_mode ==
+                       CompatibilityMode.MODERN_ANDROID else p.default_crf_h264)
+                detail = f"1-Pass • CRF {crf} • Encoder preset: {p.encoder_preset}"
+            codec = ("HEVC/H.265" if self.controller.compatibility_mode ==
+                     CompatibilityMode.MODERN_ANDROID else "H.264")
+            if p.prefers_gpu:
+                detail += " • GPU (if supported)"
+
+            if hasattr(self, "chk_adv_override") and self.chk_adv_override.isChecked():
+                detail += " • Manual overrides enabled (see Advanced)"
+            self.encoding_details_label.setText(f"{codec} • {detail} • {self.controller.target_container.upper()}")
+
+        def _on_operation_changed(self, *_args: object) -> None:
+            mode = self.operation_combo.currentData()
+            t = self.controller.translator.t
+            self.btn_start_compress.setText(
+                t("btn_start_convert") if mode == "convert" else t("btn_start_compress")
+            )
+
         def _on_target_size_changed(self) -> None:
             val = float(self.target_size_spin.value())
             if self.target_unit_combo.currentText() == "GB":
                 val *= 1024.0
+
             self.controller.target_size_mb = val
+            self._refresh_encoding_details()
             self._refresh_selection_summary()
 
         def _on_compat_changed(self) -> None:
             data = self.compat_combo.currentData()
             if data:
+
                 self.controller.compatibility_mode = CompatibilityMode(str(data))
+                self._refresh_encoding_details()
                 self._refresh_selection_summary()
 
         def _on_format_changed(self) -> None:
             data = self.format_combo.currentData()
             if data:
+
                 self.controller.target_container = str(data)
+                self._refresh_encoding_details()
                 self._refresh_selection_summary()
 
         def _browse_output_dir(self) -> None:
@@ -774,8 +1164,33 @@ if PYSIDE6_AVAILABLE:
                 self, "Select Output Folder", str(self.controller.output_dir)
             )
             if chosen:
-                self.controller.output_dir = Path(chosen)
+
+                self.controller.set_output_directory(chosen)
                 self.out_dir_edit.setText(chosen)
+
+
+        def _sync_current_output_directory(self) -> bool:
+            path = self.out_dir_edit.text().strip()
+            if not path:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Please select an output folder.")
+                return False
+            try:
+                self.controller.set_output_directory(path)
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return False
+            return True
+
+        def _save_default_folder(self) -> None:
+            try:
+                folder = self.controller.set_output_directory(
+                    self.out_dir_edit.text().strip(), remember=True
+                )
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            self.out_dir_edit.setText(str(folder))
+            self.btn_save_out_default.setText(self.controller.translator.t("default_folder_saved"))
 
         def _toggle_advanced_panel(self, checked: bool) -> None:
             self.advanced_panel.setVisible(checked)
@@ -790,41 +1205,169 @@ if PYSIDE6_AVAILABLE:
             adv.audio_codec = str(self.adv_audio_combo.currentData() or "copy")
 
         def _on_paths_dropped(self, paths: list[str]) -> None:
+            errors: list[str] = []
             for p_str in paths:
                 p = Path(p_str)
-                if p.is_dir():
-                    self.controller.add_folder(p)
-                else:
-                    self.controller.add_files([p])
+                _, failed = (
+                    self.controller.add_folder(p) if p.is_dir()
+                    else self.controller.add_files([p])
+                )
+                errors.extend(failed)
+            self._refresh_selection_summary()
+            if errors:
+                QtWidgets.QMessageBox.warning(
+                    self, "PocketVideo",
+                    self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
+                )
+
+
+        def _preview_input_row(self, row: int, _column: int) -> None:
+            cell = self.file_table.item(row, 1)
+            if cell:
+                self._open_input_file(Path(str(cell.data(Qt.ItemDataRole.UserRole))))
+
+        def _open_input_file(self, path: Path) -> None:
+            """Ask Windows to open the existing original; never execute it as a command."""
+            if path.is_file():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
+        def _remove_imported_file(self, path: Path) -> None:
+            self.controller.remove_selected_file(path)
             self._refresh_selection_summary()
 
+        def _refresh_imported_file_table(self) -> None:
+            files = self.controller.selected_files
+            keys = tuple(str(meta.file_path.resolve()) for meta in files)
+            self.file_table_title.setVisible(bool(files))
+            self.file_table.setVisible(bool(files))
+            if keys == self._last_import_paths:
+                return
+            self._last_import_paths = keys
+            self.file_table.setRowCount(len(files))
+            t = self.controller.translator.t
+            for row, media in enumerate(files):
+                path = media.file_path.resolve()
+                thumb = QtWidgets.QTableWidgetItem("🖼" if media.media_kind == "image" else "🎞")
+                self.file_table.setItem(row, 0, thumb)
+                item = QtWidgets.QTableWidgetItem(path.name)
+                item.setToolTip(str(path))
+                item.setData(Qt.ItemDataRole.UserRole, str(path))
+                self.file_table.setItem(row, 1, item)
+                v = media.primary_video
+                details = f"{format_bytes(media.file_size_bytes)}"
+                if v:
+                    details += f" • {v.resolution_label} • {v.codec_name} • {v.fps:.1f}fps"
+                elif media.media_kind == "image":
+                    details += f" • Photo {media.image_width}x{media.image_height} • {media.container_format.upper()}"
+                self.file_table.setItem(row, 2, QtWidgets.QTableWidgetItem(details))
+                actions = QtWidgets.QWidget()
+                buttons = QtWidgets.QHBoxLayout(actions)
+                buttons.setContentsMargins(2, 1, 2, 1)
+                open_btn = QtWidgets.QPushButton(t("import_open"))
+                remove_btn = QtWidgets.QPushButton(t("import_remove"))
+                open_btn.clicked.connect(lambda _checked=False, p=path: self._open_input_file(p))
+                remove_btn.clicked.connect(lambda _checked=False, p=path: self._remove_imported_file(p))
+                buttons.addWidget(open_btn)
+                buttons.addWidget(remove_btn)
+                self.file_table.setCellWidget(row, 3, actions)
+                self.file_table.setRowHeight(row, 58)
+                if self.controller.binaries:
+                    self._queue_thumbnail(media)
+
+        def _queue_thumbnail(self, media) -> None:
+            path = media.file_path.resolve()
+            try:
+                key = hashlib.sha256(f"{path}|{path.stat().st_mtime_ns}|{path.stat().st_size}".encode()).hexdigest()
+            except OSError:
+                return
+            target = self._thumbnail_dir / (key + ".png")
+            if target.exists():
+                self._on_thumbnail_ready(str(path), str(target))
+                return
+            if key in self._thumbnail_jobs:
+                return
+            self._thumbnail_jobs.add(key)
+
+            def worker() -> None:
+                try:
+                    with self._preview_semaphore:
+                        if media.media_kind == "image":
+                            thumbnail_png(path, target)
+                        else:
+                            extract_representative_frame(
+                                path, target, self.controller.binaries,
+                                duration_seconds=media.duration_seconds,
+                            )
+                    self.signals.preview_ready.emit(str(path), str(target))
+                except Exception:
+                    pass  # Thumbnail failures must never prevent processing the input.
+                finally:
+                    self._thumbnail_jobs.discard(key)
+
+            threading.Thread(target=worker, name="PocketVideoThumbnail", daemon=True).start()
+
+        def _on_thumbnail_ready(self, original: str, image_path: str) -> None:
+            pixmap = QtGui.QPixmap(image_path)
+            if pixmap.isNull():
+                return
+            pixmap = pixmap.scaled(
+                88, 50, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            for row in range(self.file_table.rowCount()):
+                item = self.file_table.item(row, 1)
+                icon_cell = self.file_table.item(row, 0)
+                if item and icon_cell and item.data(Qt.ItemDataRole.UserRole) == original:
+                    icon_cell.setText("")
+                    icon_cell.setIcon(QtGui.QIcon(pixmap))
+                    break
+
         def _prompt_add_files(self) -> None:
-            exts = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_VIDEO_EXTENSIONS))
+            exts = " ".join(f"*{ext}" for ext in sorted(
+                SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS
+            ))
             files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-                self, "Select Video Files", "", f"Video Files ({exts})"
+                self, "Select Videos & Photos", "", f"Videos & Photos ({exts})"
             )
             if files:
-                self.controller.add_files(files)
+                _, errors = self.controller.add_files(files)
                 self._refresh_selection_summary()
+                if errors:
+                    QtWidgets.QMessageBox.warning(
+                        self, "PocketVideo",
+                        self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
+                    )
 
         def _prompt_add_folder(self) -> None:
-            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Video Folder")
+            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select Media Folder")
             if folder:
-                self.controller.add_folder(folder)
+                _, errors = self.controller.add_folder(folder)
                 self._refresh_selection_summary()
+                if errors:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", "\n".join(errors[:12]))
 
         def _clear_files(self) -> None:
             self.controller.clear_selected_files()
             self._refresh_selection_summary()
 
         def _open_compare_dialog(self) -> None:
-            if not self.controller.selected_files:
+            video = next((m for m in self.controller.selected_files if m.media_kind == "video"), None)
+            if video is None:
+                QtWidgets.QMessageBox.information(
+                    self, "PocketVideo", "Select a video for a short compression sample."
+                )
                 return
-            dlg = BeforeAfterCompareDialog(self.controller, self)
-            dlg.exec()
+            original = list(self.controller.selected_files)
+            try:
+                self.controller.selected_files = [video, *(m for m in original if m is not video)]
+                dlg = BeforeAfterCompareDialog(self.controller, self)
+                dlg.exec()
+            finally:
+                self.controller.selected_files = original
 
         def _refresh_selection_summary(self) -> None:
             files = self.controller.selected_files
+            self._refresh_imported_file_table()
             if not files:
                 self.file_summary_label.setText("No videos selected yet.")
                 self.warning_banner.setVisible(False)
@@ -836,20 +1379,35 @@ if PYSIDE6_AVAILABLE:
             v = first.primary_video
             v_desc = (
                 f"{v.resolution_label} • {v.fps:.0f}fps • {v.codec_name.upper()} • {v.hdr_format_name}"
-                if v else "Unknown Video"
+                if v else (
+                    f"Photo {first.image_width}x{first.image_height} • {first.container_format.upper()}"
+                    if first.media_kind == "image" else "Unknown Video"
+                )
             )
             self.file_summary_label.setText(
                 f"Selected: {len(files)} file(s) ({format_bytes(total_bytes)}) — Primary: {first.file_path.name} [{v_desc}]"
             )
 
-            if self.controller.active_preset == PresetId.CUSTOM_SIZE:
-                plan = self.controller.preview_target_size_plan(first)
+            video = next((m for m in files if m.media_kind == "video"), None)
+            if self.controller.active_preset == PresetId.CUSTOM_SIZE and video:
+                plan = self.controller.preview_target_size_plan(video)
                 self.target_plan_status.setText(plan.explanation)
+            else:
+                self.target_plan_status.setText("")
 
-            mode, reason = self.controller.check_conversion_mode(
-                first, self.controller.target_container
-            )
-            self.convert_mode_banner.setText(f"{mode.value}: {reason}")
+            # During dashboard construction the separate Convert page has not
+            # been created yet, so this label may not exist when preloaded
+            # photos are present in the controller.
+            if hasattr(self, "convert_mode_banner"):
+                if video:
+                    mode, reason = self.controller.check_conversion_mode(
+                        video, self.controller.target_container
+                    )
+                    self.convert_mode_banner.setText(f"{mode.value}: {reason}")
+                else:
+                    self.convert_mode_banner.setText(
+                        self.controller.translator.t("image_support_note")
+                    )
 
             warnings = self.controller.evaluate_active_warnings()
             if warnings:
@@ -858,22 +1416,95 @@ if PYSIDE6_AVAILABLE:
             else:
                 self.warning_banner.setVisible(False)
 
+        def _on_output_preferences_changed(self, *_args: object) -> bool:
+            try:
+                self.controller.update_output_preferences(
+                    suffix=self.suffix_edit.text(),
+                    policy=OutputPolicy(self.output_policy_combo.currentData()),
+                    image_format=str(self.image_format_combo.currentData()),
+                    image_preset=ImagePreset(self.image_preset_combo.currentData()),
+                    image_quality=self.image_quality_spin.value(),
+                )
+                self.controller.settings.after_export_action = AfterExportAction(
+                    self.after_action_combo.currentData()
+                ).value
+                self.controller.settings_mgr.save_settings()
+                self.image_quality_spin.setEnabled(
+                    self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
+                )
+                return True
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return False
+
+        def _confirm_batch_actions(self) -> bool:
+            t = self.controller.translator.t
+            if self.controller.output_policy in (
+                OutputPolicy.REPLACE_OUTPUT,
+                OutputPolicy.REPLACE_SOURCE_BACKUP,
+            ):
+                if QtWidgets.QMessageBox.question(
+                    self, "PocketVideo", t("overwrite_warning"),
+                    QtWidgets.QMessageBox.StandardButton.Yes |
+                    QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+            action = AfterExportAction(self.controller.settings.after_export_action)
+            if action != AfterExportAction.NONE:
+                if QtWidgets.QMessageBox.question(
+                    self, "PocketVideo",
+                    t("power_warning", action=action.value),
+                    QtWidgets.QMessageBox.StandardButton.Yes |
+                    QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return False
+            return True
+
         def _start_compression_batch(self) -> None:
             if not self.controller.selected_files:
                 return
-            self.controller.output_dir = Path(self.out_dir_edit.text().strip() or str(self.controller.output_dir))
-            self.controller.enqueue_current_batch(operation_mode=OperationMode.COMPRESS)
+            if not self._sync_current_output_directory():
+                return
+            if not self._on_output_preferences_changed():
+                return
+            if not self._confirm_batch_actions():
+                return
+            selected_op = self.operation_combo.currentData()
+            try:
+                items = self.controller.enqueue_current_batch(
+                    auto_start=False,
+                    operation_mode=(
+                        OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
+                        else OperationMode.COMPRESS
+                    ),
+                    allow_smart_remux=(selected_op == "convert"),
+                )
+            except (ValueError, OSError, RuntimeError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            if not items:
+                QtWidgets.QMessageBox.information(
+                    self, "PocketVideo", "No jobs queued: all output files already exist."
+                )
+                return
+            self._power_batch_ids = {item.spec.job_id for item in items}
+            self._power_batch_action = AfterExportAction(
+                self.controller.settings.after_export_action
+            )
+            self._power_prompt_pending = False
             self._switch_page(2)
+            if self.controller.queue_manager:
+                self.controller.queue_manager.start()
+
+        def _go_to_convert_on_main(self) -> None:
+            self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
+            self._switch_page(0)
 
         def _start_conversion_batch(self) -> None:
-            if not self.controller.selected_files:
-                return
-            self.controller.output_dir = Path(self.out_dir_edit.text().strip() or str(self.controller.output_dir))
-            self.controller.enqueue_current_batch(
-                operation_mode=OperationMode.CONVERT_TRANSCODE,
-                allow_smart_remux=self.chk_smart_remux.isChecked(),
-            )
-            self._switch_page(2)
+            self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
+            self._start_compression_batch()
 
         def _on_job_updated_ui(self, item: QueueItem) -> None:
             row = self._find_or_create_job_row(item.spec.job_id)
@@ -898,9 +1529,58 @@ if PYSIDE6_AVAILABLE:
                 )
             elif item.error_message:
                 res_txt = item.error_message
+                if (
+                    "USB/HDD" in item.error_message
+                    and item.spec.job_id not in self._usb_error_alerted
+                ):
+                    self._usb_error_alerted.add(item.spec.job_id)
+                    self.warning_banner.setText(self.controller.translator.t("usb_disconnected"))
+                    self.warning_banner.setVisible(True)
             else:
                 res_txt = item.resource_summary
+
             self.queue_table.setItem(row, 6, QtWidgets.QTableWidgetItem(res_txt))
+            if item.result and item.result.output_path.is_file():
+                if self.queue_table.cellWidget(row, 7) is None:
+                    result = item.result
+                    actions = QtWidgets.QWidget()
+                    actions_row = QtWidgets.QHBoxLayout(actions)
+                    actions_row.setContentsMargins(1, 0, 1, 0)
+                    for title_key, callback in (
+                        ("queue_open", lambda r=result: self._open_output_file(r)),
+                        ("queue_folder", lambda r=result: self._open_output_folder(r)),
+                        ("queue_compare", lambda r=result: self._show_completed_compare(r)),
+                    ):
+                        btn = QtWidgets.QPushButton(self.controller.translator.t(title_key))
+                        btn.clicked.connect(lambda _checked=False, f=callback: f())
+                        actions_row.addWidget(btn)
+                    self.queue_table.setCellWidget(row, 7, actions)
+                    self.queue_table.setColumnWidth(7, 330)
+            elif self.queue_table.cellWidget(row, 7) is not None:
+                self.queue_table.removeCellWidget(row, 7)
+
+        def _open_output_file(self, result: JobResultComparison) -> None:
+            if result.output_path.is_file():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path)))
+            else:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output file is missing.")
+
+        def _open_output_folder(self, result: JobResultComparison) -> None:
+            if result.output_path.parent.is_dir():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path.parent)))
+            else:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output folder is missing.")
+
+        def _show_completed_compare(self, result: JobResultComparison) -> None:
+            original_path = result.source_backup_path or result.input_path
+            if not original_path.is_file() or not result.output_path.is_file():
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Input or output file is missing.")
+                return
+            if not self.controller.binaries:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
+                return
+            dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            dlg.exec()
 
         def _find_or_create_job_row(self, job_id: str) -> int:
             for r in range(self.queue_table.rowCount()):
@@ -913,6 +1593,83 @@ if PYSIDE6_AVAILABLE:
 
         def _on_queue_summary_ui(self, avg_pct: float, _completed: int, _total: int) -> None:
             self.overall_progress_bar.setValue(int(round(avg_pct)))
+            if (
+                self._power_batch_action == AfterExportAction.NONE
+                or not self._power_batch_ids
+                or self._power_prompt_pending
+                or self.controller.queue_manager is None
+            ):
+                return
+            statuses = {
+                x.spec.job_id: x.status for x in self.controller.queue_manager.items()
+            }
+            if not self._power_batch_ids.issubset(statuses):
+                return
+            if any(x in (JobStatus.FAILED, JobStatus.CANCELLED) for x in statuses.values()):
+                # A failed export disarms power actions, including on a later
+                # Retry Failed. Starting a NEW batch requires confirmation again.
+                self._power_batch_action = AfterExportAction.NONE
+                self._power_batch_ids.clear()
+                return
+            # Never power off after a failed, skipped or cancelled job, or while
+            # any older queue job is still active.
+            if (
+                all(x == JobStatus.COMPLETED for x in statuses.values())
+                and self.controller.queue_manager.is_idle()
+            ):
+                self._power_verified_outputs = [
+                    x.result.output_path
+                    for x in self.controller.queue_manager.items()
+                    if x.result is not None
+                ]
+                self._power_prompt_pending = True
+                QtCore.QTimer.singleShot(0, self._show_post_export_countdown)
+
+        def _show_post_export_countdown(self) -> None:
+            action = self._power_batch_action
+            self._power_batch_ids = set()
+            self._power_batch_action = AfterExportAction.NONE
+            if action == AfterExportAction.NONE:
+                return
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle("PocketVideo — After Export")
+            dialog.setMinimumWidth(440)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            label = QtWidgets.QLabel()
+            label.setWordWrap(True)
+            layout.addWidget(label)
+            cancel = QtWidgets.QPushButton(
+                self.controller.translator.t("cancel_power")
+            )
+            cancel.clicked.connect(dialog.reject)
+            layout.addWidget(cancel)
+            remaining = [30]
+            def tick() -> None:
+                label.setText(
+                    self.controller.translator.t(
+                        "power_countdown", action=action.value,
+                        seconds=remaining[0]
+                    )
+                )
+                if remaining[0] <= 0:
+                    dialog.accept()
+                remaining[0] -= 1
+            timer = QtCore.QTimer(dialog)
+            timer.timeout.connect(tick)
+            tick()
+            timer.start(1000)
+            if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                if not self._power_verified_outputs or any(
+                    not p.is_file() for p in self._power_verified_outputs
+                ):
+                    QtWidgets.QMessageBox.warning(
+                        self, "PocketVideo", "Exported files are no longer accessible; power action cancelled."
+                    )
+                    return
+                try:
+                    run_after_export(action, user_confirmed=True)
+                except (OSError, PermissionError, RuntimeError) as exc:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
 
         def _on_job_completed_ui(self, _comparison: JobResultComparison) -> None:
             self._refresh_history_table()
@@ -963,6 +1720,19 @@ if PYSIDE6_AVAILABLE:
             if self.controller.queue_manager:
                 self.controller.queue_manager.retry_failed()
 
+
+        def _set_cpu_cap_selection(self, value: int) -> None:
+            value = int(value)
+            idx = self.cpu_cap_combo.findData(value)
+            if idx < 0:
+                # Preserve a saved value (including the built-in 40% Light mode)
+                # rather than silently increasing the user's CPU budget.
+                label = self.controller.translator.t("cpu_saved_custom", value=value)
+                self.cpu_cap_combo.addItem(label, value)
+                idx = self.cpu_cap_combo.findData(value)
+            with QtCore.QSignalBlocker(self.cpu_cap_combo):
+                self.cpu_cap_combo.setCurrentIndex(idx)
+
         def _on_resource_mode_changed(self) -> None:
             mode_val = self.res_mode_combo.currentData()
             if mode_val:
@@ -970,20 +1740,24 @@ if PYSIDE6_AVAILABLE:
                 if mode == ResourceMode.CUSTOM:
                     return
                 limits = self.controller.apply_resource_mode(mode)
-                for widget in (self.cpu_cap_spin, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+
+                for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
                     widget.blockSignals(True)
                 try:
-                    self.cpu_cap_spin.setValue(limits.cpu_hard_cap_percent)
+
+                    self._set_cpu_cap_selection(limits.cpu_hard_cap_percent)
                     self.threads_spin.setValue(limits.cpu_threads)
                     self.concurrent_spin.setValue(limits.max_concurrent_jobs)
                     self.chk_gpu_enable.setChecked(limits.enable_gpu_encoding)
                 finally:
-                    for widget in (self.cpu_cap_spin, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+
+                    for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
                         widget.blockSignals(False)
 
         def _on_resource_controls_edited(self, *_args: object) -> None:
             self.controller.update_resource_controls(
-                cpu_hard_cap_percent=self.cpu_cap_spin.value(),
+
+                cpu_hard_cap_percent=int(self.cpu_cap_combo.currentData()),
                 cpu_threads=self.threads_spin.value(),
                 max_concurrent_jobs=self.concurrent_spin.value(),
                 enable_gpu_encoding=self.chk_gpu_enable.isChecked(),

@@ -65,11 +65,53 @@ def build_stylesheet(theme_name: str = "dark") -> str:
     """Generate Qt Style Sheet (QSS) for the given theme ('dark' or 'light')."""
     p = DARK_PALETTE if theme_name == "dark" else LIGHT_PALETTE
     return f"""
-    QMainWindow, QWidget#RootContainer {{
+    /* The scroll page and inner widgets also need the palette; otherwise the
+       Windows native Qt page renders a light background even in Dark Mode. */
+    QWidget, QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget {{
         background-color: {p.bg_primary};
         color: {p.text_primary};
-        font-family: "Segoe UI", "Leelawadee UI", "Noto Sans Thai", sans-serif;
+        font-family: "Leelawadee UI", "Tahoma", "Segoe UI", sans-serif;
         font-size: 13px;
+    }}
+    QScrollArea {{
+        border: none;
+    }}
+    QTabWidget::pane {{
+        border: 1px solid {p.border_subtle};
+        background-color: {p.bg_primary};
+        border-radius: 8px;
+    }}
+    QTabBar::tab {{
+        background-color: {p.bg_secondary};
+        color: {p.text_secondary};
+        border: 1px solid {p.border_subtle};
+        padding: 9px 16px;
+        min-width: 108px;
+    }}
+    QTabBar::tab:selected {{
+        background-color: {p.bg_card_selected};
+        color: {p.text_primary};
+        border-bottom: 2px solid {p.border_accent};
+    }}
+    QTableWidget, QTableView {{
+        background-color: {p.bg_card};
+        alternate-background-color: {p.bg_secondary};
+        color: {p.text_primary};
+        gridline-color: {p.border_subtle};
+        border: 1px solid {p.border_subtle};
+        selection-background-color: {p.bg_card_selected};
+        selection-color: {p.text_primary};
+    }}
+    QHeaderView::section {{
+        background-color: {p.bg_secondary};
+        color: {p.text_primary};
+        border: 1px solid {p.border_subtle};
+        padding: 6px;
+        font-weight: 600;
+    }}
+    QCheckBox {{
+        color: {p.text_primary};
+        spacing: 6px;
     }}
     QFrame#SidebarFrame {{
         background-color: {p.bg_secondary};

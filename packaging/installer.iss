@@ -1,6 +1,6 @@
 ; Inno Setup 6 Script for PocketVideo Windows 10/11 x64 Installer
 #define MyAppName "PocketVideo"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "PocketVideo Open-Source Contributors"
 #define MyAppURL "https://github.com/Apichetfirm/PocketVideo"
 #define MyAppExeName "PocketVideo.exe"

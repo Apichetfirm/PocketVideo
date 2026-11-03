@@ -85,6 +85,23 @@ jobs:
           & $FFprobeExe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $Output.FullName
           if ($LASTEXITCODE -ne 0) { throw "Bundled FFprobe could not inspect the compressed video." }
 
+      - name: Smoke-Test Bundled HEIC/HEIF Image Encoder (Windows EXE)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Exe = (Resolve-Path '.\\dist\\PocketVideo\\PocketVideo.exe').Path
+          python -c "from PIL import Image; Image.new('RGB',(320,200),(20,110,170)).save('dist/ci_photo.jpg', quality=94)"
+          $ImgRun = Start-Process -FilePath $Exe -ArgumentList @(
+            '--cli-compress', '.\\dist\\ci_photo.jpg',
+            '--image-format', 'heic', '--suffix', '_ci',
+            '--output-dir', '.\\dist\\ci_heic_output'
+          ) -Wait -PassThru
+          if ($ImgRun.ExitCode -ne 0) { throw "Packaged Windows .exe HEIC encoder failed (exit $($ImgRun.ExitCode))." }
+          $Heic = Get-ChildItem -Path '.\\dist\\ci_heic_output' -Filter '*.heic' | Select-Object -First 1
+          if (-not $Heic -or $Heic.Length -le 0) { throw "No HEIC output produced by the packaged executable." }
+          python -c "from PIL import Image; import pillow_heif,sys; pillow_heif.register_heif_opener(); im=Image.open(sys.argv[1]); im.load(); assert im.size == (320,200)" $Heic.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Packaged HEIC file could not be decoded." }
+
       - name: Ensure Inno Setup 6 Compiler Is Available
         shell: pwsh
         run: |
@@ -105,13 +122,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "dist/release" | Out-Null
-          Compress-Archive -Path "dist/PocketVideo/*" -DestinationPath "dist/release/PocketVideo-1.0.0-win64-portable.zip" -Force
+          Compress-Archive -Path "dist/PocketVideo/*" -DestinationPath "dist/release/PocketVideo-1.1.0-win64-portable.zip" -Force
           iscc "packaging/installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup packaging failed." }
-          Copy-Item "dist/installer/PocketVideo-Setup-1.0.0-win64.exe" "dist/release/" -Force
+          Copy-Item "dist/installer/PocketVideo-Setup-1.1.0-win64.exe" "dist/release/" -Force
           Copy-Item "LICENSE" "dist/release/LICENSE.txt" -Force
           Copy-Item "THIRD_PARTY_NOTICES.md" "dist/release/THIRD_PARTY_NOTICES.md" -Force
-          foreach ($Package in @('dist/release/PocketVideo-Setup-1.0.0-win64.exe', 'dist/release/PocketVideo-1.0.0-win64-portable.zip')) {
+          foreach ($Package in @('dist/release/PocketVideo-Setup-1.1.0-win64.exe', 'dist/release/PocketVideo-1.1.0-win64-portable.zip')) {
             if (-not (Test-Path $Package)) { throw "Required release package is missing: $Package" }
             if ((Get-Item $Package).Length -le 0) { throw "Release package is empty: $Package" }
           }
@@ -131,8 +148,8 @@ jobs:
         with:
           name: PocketVideo-Windows-x64-Packages
           path: |
-            dist/release/PocketVideo-Setup-1.0.0-win64.exe
-            dist/release/PocketVideo-1.0.0-win64-portable.zip
+            dist/release/PocketVideo-Setup-1.1.0-win64.exe
+            dist/release/PocketVideo-1.1.0-win64-portable.zip
             dist/release/SHA256SUMS.txt
             dist/release/LICENSE.txt
             dist/release/THIRD_PARTY_NOTICES.md
@@ -143,8 +160,8 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            dist/release/PocketVideo-Setup-1.0.0-win64.exe
-            dist/release/PocketVideo-1.0.0-win64-portable.zip
+            dist/release/PocketVideo-Setup-1.1.0-win64.exe
+            dist/release/PocketVideo-1.1.0-win64-portable.zip
             dist/release/SHA256SUMS.txt
             dist/release/LICENSE.txt
             dist/release/THIRD_PARTY_NOTICES.md

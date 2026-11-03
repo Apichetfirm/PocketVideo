@@ -22,3 +22,10 @@ PocketVideo is licensed under the **GNU General Public License v3.0 or later (`G
 ## 3. Python Runtime & Standard Library
 - **Website**: https://www.python.org/
 - **License**: Python Software Foundation License Version 2 (`PSF-2.0`)
+
+
+## Pillow / pillow-heif image support (v1.1+)
+- Pillow: HPND license; https://python-pillow.github.io/
+- pillow-heif 1.8.1: source BSD-3-Clause; **binary wheels GPLv2** due to bundled codec libraries.
+- The pillow-heif Windows wheel includes libheif (LGPLv3), libde265 (LGPLv3), x265 (GPLv2), and runtime support libraries. Distribution must include the applicable license texts, corresponding-source notices and GPL obligations; upstream list: https://github.com/bigcat88/pillow_heif/blob/master/LICENSES_bundled.txt
+- PocketVideo is already licensed GPL-3.0-or-later; do not remove the third-party license/source obligations when distributing the Installer or portable bundle. Review HEVC patent licensing separately before distributing in additional jurisdictions.

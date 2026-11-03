@@ -24,10 +24,25 @@ from pocketvideo.ui.theme import DARK_PALETTE, LIGHT_PALETTE
 
 
 def capture_with_pyside6(out_dir: Path) -> None:
-    from PySide6 import QtWidgets
+
+    from PySide6 import QtGui, QtWidgets
     from pocketvideo.ui.main_window import PocketVideoMainWindow
 
+
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    # Surface Windows Server font limitations in CI: screenshots captured with
+    # QT_QPA_PLATFORM=offscreen may omit glyphs even though desktop Windows works.
+    font_families = set(QtGui.QFontDatabase.families())
+    for family in ("Leelawadee UI", "Tahoma", "Segoe UI", "Arial"):
+        if family in font_families:
+            metrics = QtGui.QFontMetrics(QtGui.QFont(family, 10))
+            print(
+                f"FONT_DIAGNOSTIC family={family} "
+                f"latin={metrics.inFontUcs4(ord('A'))} thai={metrics.inFontUcs4(ord('ก'))}"
+            )
+    preferred = next((f for f in ("Leelawadee UI", "Tahoma", "Segoe UI") if f in font_families), None)
+    if preferred:
+        app.setFont(QtGui.QFont(preferred, 10))
     ctrl = AppController()
     win = PocketVideoMainWindow(ctrl)
     win.resize(1240, 820)
