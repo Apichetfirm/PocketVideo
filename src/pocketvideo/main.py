@@ -25,6 +25,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument("--version", action="version", version=f"{__app_name__} {__version__}")
     parser.add_argument("--cli-compress", nargs="+", help="Run batch compression in headless CLI mode")
     parser.add_argument(
+        "--verify-video-player", action="store_true",
+        help="Smoke-test bundled Qt Multimedia playback widgets (CI utility)",
+    )
+    parser.add_argument(
         "--preset",
         choices=[p.value for p in PresetId],
         default=PresetId.BEST_BALANCE.value,
@@ -105,8 +109,30 @@ def run_cli_batch(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def verify_video_player() -> int:
+    """Validate the packaged Qt Multimedia codecs/widgets can be imported."""
+    if not PYSIDE6_AVAILABLE:
+        return 1
+    from PySide6 import QtWidgets
+    from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+    from PySide6.QtMultimediaWidgets import QVideoWidget
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    widget = QVideoWidget()
+    player = QMediaPlayer()
+    audio = QAudioOutput()
+    player.setAudioOutput(audio)
+    player.setVideoOutput(widget)
+    player.stop()
+    player.setVideoOutput(None)
+    widget.close()
+    app.processEvents()
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
+    if args.verify_video_player:
+        return verify_video_player()
     if args.cli_compress:
         return run_cli_batch(args)
 

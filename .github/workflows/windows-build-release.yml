@@ -85,6 +85,16 @@ jobs:
           & $FFprobeExe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 $Output.FullName
           if ($LASTEXITCODE -ne 0) { throw "Bundled FFprobe could not inspect the compressed video." }
 
+      - name: Verify Synchronized Video Player Libraries in Bundled Windows EXE
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Exe = (Resolve-Path '.\\dist\\PocketVideo\\PocketVideo.exe').Path
+          $Verify = Start-Process -FilePath $Exe -ArgumentList @('--verify-video-player') -Wait -PassThru
+          if ($Verify.ExitCode -ne 0) { throw "Packaged PocketVideo lacks working Qt Multimedia/QtVideoWidget (exit $($Verify.ExitCode))." }
+
       - name: Smoke-Test Bundled HEIC/HEIF Image Encoder (Windows EXE)
         shell: pwsh
         run: |
