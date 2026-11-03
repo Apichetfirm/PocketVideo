@@ -65,16 +65,34 @@ def build_stylesheet(theme_name: str = "dark") -> str:
     """Generate Qt Style Sheet (QSS) for the given theme ('dark' or 'light')."""
     p = DARK_PALETTE if theme_name == "dark" else LIGHT_PALETTE
     return f"""
-    /* The scroll page and inner widgets also need the palette; otherwise the
-       Windows native Qt page renders a light background even in Dark Mode. */
-    QWidget, QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget {{
+    /* Scope opaque surfaces to real page containers. Qt 6 renders every
+       QLabel as a tiny opaque rectangle if background-color is assigned to
+       all QWidgets, causing the dark strips visible in older PocketVideo. */
+    QMainWindow, QWidget#RootContainer, QStackedWidget, QScrollArea,
+    QWidget#DashboardPage, QScrollArea > QWidget > QWidget {{
         background-color: {p.bg_primary};
         color: {p.text_primary};
         font-family: "Leelawadee UI", "Tahoma", "Segoe UI", sans-serif;
         font-size: 13px;
     }}
+    QLabel {{
+        background-color: transparent;
+        color: {p.text_primary};
+        font-family: "Leelawadee UI", "Tahoma", "Segoe UI", sans-serif;
+    }}
     QScrollArea {{
         border: none;
+    }}
+    QGraphicsView {{
+        background-color: {p.bg_card};
+        border: 1px solid {p.border_subtle};
+        border-radius: 8px;
+    }}
+    QToolTip {{
+        background-color: {p.bg_secondary};
+        color: {p.text_primary};
+        border: 1px solid {p.border_subtle};
+        padding: 6px;
     }}
     QTabWidget::pane {{
         border: 1px solid {p.border_subtle};
@@ -136,7 +154,7 @@ def build_stylesheet(theme_name: str = "dark") -> str:
         border: 2px solid {p.border_accent};
     }}
     QLabel#HeadingLabel {{
-        font-size: 20px;
+        font-size: 18px;
         font-weight: 700;
         color: {p.text_primary};
     }}
@@ -168,7 +186,7 @@ def build_stylesheet(theme_name: str = "dark") -> str:
         color: {p.text_primary};
         border: 1px solid {p.border_subtle};
         border-radius: 8px;
-        padding: 8px 14px;
+        padding: 7px 10px;
         font-weight: 600;
     }}
     QPushButton:hover {{
@@ -188,7 +206,7 @@ def build_stylesheet(theme_name: str = "dark") -> str:
     }}
     QPushButton#NavButton {{
         text-align: left;
-        padding: 10px 14px;
+        padding: 9px 12px;
         border-radius: 8px;
         border: none;
         background-color: transparent;

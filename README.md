@@ -115,3 +115,12 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 ## Creator credit
 
 **Created by Firm Impulse.** PocketVideo is free and open source. Contributions and third-party library attribution remain acknowledged under the applicable license files and third-party notices.
+
+## v1.1.1 — Clean UI and synchronized video preview (development)
+
+- **Real synchronized Before/After video players:** both source and encoded output are playable together with one Play/Pause/Seek timeline. Videos are muted by default to avoid echo. The before-export sample preview is a temporary encoded clip; original playback seeks to the same source segment.
+- **Zoom inspection:** open a compact floating detail window at the selected playback timestamp; FFmpeg extracts same-timestamp frames from the actual source/output, and both panes support 100–500% zoom and drag-to-pan.
+- **Open file:** a menu offers **Before (original/backup)** and **After (output)** individually. **File location** selects the *output file itself* in Windows Explorer, instead of merely opening the directory.
+- **Simpler dark/light UI:** removes unintended label background bands; consolidates the duplicated conversion navigation; reduces dashboard copy and imported-file table overflow. The existing five compression presets and image/video batch settings remain available.
+- **Compatibility:** Qt Multimedia supplies video playback. Codec support can vary with Windows/Qt codecs; if a source cannot be played, the app explains the error rather than claiming a successful comparison. FFmpeg frame inspection remains available for zoom.
+- v1.1.0 public binaries are not retroactively updated merely by merging; install a verified v1.1.1 Windows CI artifact when available. Review codec redistribution obligations before creating a new public release.

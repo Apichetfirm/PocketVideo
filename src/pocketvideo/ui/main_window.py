@@ -49,7 +49,6 @@ from pocketvideo.core.models import (
     OutputPolicy,
     AfterExportAction,
     ImagePreset,
-    JobStatus,
 )
 from pocketvideo.media.presets import PRESET_CATALOG
 from pocketvideo.media.encoder import extract_representative_frame
@@ -60,6 +59,7 @@ from pocketvideo.resources.post_export import run_after_export
 from pocketvideo.queue.manager import QueueItem, SUPPORTED_VIDEO_EXTENSIONS
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
+from pocketvideo.ui.file_actions import reveal_file_in_location
 
 
 if PYSIDE6_AVAILABLE:
@@ -79,10 +79,10 @@ if PYSIDE6_AVAILABLE:
             super().__init__(parent)
             self.setObjectName("DropZoneFrame")
             self.setAcceptDrops(True)
-            self.setMinimumHeight(135)
+            self.setMinimumHeight(116)
 
             layout = QtWidgets.QVBoxLayout(self)
-            layout.setContentsMargins(20, 18, 20, 18)
+            layout.setContentsMargins(16, 10, 16, 10)
             layout.setSpacing(8)
             layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -184,63 +184,87 @@ if PYSIDE6_AVAILABLE:
             super().mousePressEvent(event)
 
     class BeforeAfterCompareDialog(QtWidgets.QDialog):
-        """Modal dialog showing representative before/after frames and short sample compression metrics."""
+        """Asynchronously generate a short sample, then compare two real videos."""
 
-        def __init__(
-            self,
-            controller: AppController,
-            parent: Optional[QtWidgets.QWidget] = None,
-        ) -> None:
+        sample_ready = Signal(str, int)
+        sample_failed = Signal(str)
+
+        def __init__(self, controller: AppController, parent=None) -> None:
             super().__init__(parent)
             self.controller = controller
-            self.setWindowTitle(self.controller.translator.t("btn_inspect_frames"))
-            self.resize(960, 580)
-
+            self._scratch = tempfile.TemporaryDirectory(prefix="pocketvideo_sample_")
+            self._busy = False
+            self.setWindowTitle("PocketVideo — ทดลองบีบอัดและเทียบวิดีโอ")
+            self.resize(520, 185)
             layout = QtWidgets.QVBoxLayout(self)
-            self.summary_label = QtWidgets.QLabel()
-            self.summary_label.setObjectName("SubheadingLabel")
+            self.summary_label = QtWidgets.QLabel(
+                "สร้างคลิปทดลอง 2.5 วินาที เพื่อเล่นต้นฉบับและไฟล์บีบอัดพร้อมกัน"
+            )
+            self.summary_label.setWordWrap(True)
             layout.addWidget(self.summary_label)
-
-            frames_row = QtWidgets.QHBoxLayout()
-            self.before_image = QtWidgets.QLabel("Original Frame")
-            self.before_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.before_image.setMinimumSize(440, 360)
-            self.after_image = QtWidgets.QLabel("Compressed Sample Frame")
-            self.after_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.after_image.setMinimumSize(440, 360)
-            frames_row.addWidget(self.before_image, 1)
-            frames_row.addWidget(self.after_image, 1)
-            layout.addLayout(frames_row, 1)
-
-            btn_run = QtWidgets.QPushButton("Generate 2.5s Sample & Compare Detail")
-            btn_run.setObjectName("PrimaryStartButton")
-            btn_run.clicked.connect(self._run_sample)
-            layout.addWidget(btn_run)
+            self.status_label = QtWidgets.QLabel("ไฟล์ต้นฉบับจะไม่ถูกเปลี่ยนแปลง")
+            self.status_label.setObjectName("MutedLabel")
+            layout.addWidget(self.status_label)
+            self.run_button = QtWidgets.QPushButton("▶ สร้างตัวอย่างและเปิดตัวเล่นคู่")
+            self.run_button.setObjectName("PrimaryStartButton")
+            self.run_button.clicked.connect(self._run_sample)
+            layout.addWidget(self.run_button)
+            self.sample_ready.connect(self._show_player)
+            self.sample_failed.connect(self._on_error)
 
         def _run_sample(self) -> None:
-            if not self.controller.selected_files:
+            media = next(
+                (m for m in self.controller.selected_files if m.media_kind == "video"), None
+            )
+            if media is None or self._busy:
                 return
-            media = self.controller.selected_files[0]
-            tmp_dir = Path(tempfile.gettempdir()) / "pocketvideo_preview"
+            self._busy = True
+            self.run_button.setEnabled(False)
+            self.status_label.setText("กำลังสร้างคลิปทดลองด้วย FFmpeg…")
+            source = media.file_path
+            offset_ms = int(
+                min(max(0.0, media.duration_seconds * 0.2),
+                    max(0.0, media.duration_seconds - 2.5)) * 1000
+            )
+            self._sample_source = source
+
+            def background() -> None:
+                try:
+                    video, _before_png, _after_png = self.controller.generate_before_after_preview(
+                        media, Path(self._scratch.name), sample_duration=2.5
+                    )
+                    self.sample_ready.emit(str(video), offset_ms)
+                except Exception as exc:
+                    self.sample_failed.emit(str(exc))
+
+            threading.Thread(target=background, name="PocketVideoSample", daemon=True).start()
+
+        def _show_player(self, sample_path: str, offset_ms: int) -> None:
+            self._busy = False
+            self.run_button.setEnabled(True)
+            self.status_label.setText("สร้างตัวอย่างเสร็จแล้ว")
+            from pocketvideo.ui.video_compare import SynchronizedVideoCompareDialog
             try:
-                sample_vid, before_png, after_png = self.controller.generate_before_after_preview(
-                    media, tmp_dir, sample_duration=2.5
+                dialog = SynchronizedVideoCompareDialog(
+                    self._sample_source, Path(sample_path), self.controller.binaries,
+                    self, before_offset_ms=offset_ms,
                 )
-                sample_size = sample_vid.stat().st_size
-                self.summary_label.setText(
-                    f"Source: {media.file_path.name} ({format_bytes(media.file_size_bytes)}) | "
-                    f"Sample Output ({sample_vid.name}): {format_bytes(sample_size)}"
-                )
-                pix_before = QtGui.QPixmap(str(before_png)).scaled(
-                    440, 360, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                pix_after = QtGui.QPixmap(str(after_png)).scaled(
-                    440, 360, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-                )
-                self.before_image.setPixmap(pix_before)
-                self.after_image.setPixmap(pix_after)
-            except Exception as exc:
-                self.summary_label.setText(f"Preview error: {exc}")
+                dialog.exec()
+            except (OSError, RuntimeError) as exc:
+                self.status_label.setText(f"ตัวเล่นวิดีโอไม่พร้อม: {exc}")
+
+        def _on_error(self, error: str) -> None:
+            self._busy = False
+            self.run_button.setEnabled(True)
+            self.status_label.setText("สร้างตัวอย่างไม่สำเร็จ: " + error)
+
+        def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+            if self._busy:
+                event.ignore()
+                self.status_label.setText("กำลังสร้างตัวอย่าง ปิดได้เมื่อประมวลผลเสร็จ")
+                return
+            self._scratch.cleanup()
+            super().closeEvent(event)
 
     class CompletedVideoCompareDialog(QtWidgets.QDialog):
         """Compare aligned frames from the completed *real* source and output."""
@@ -341,7 +365,7 @@ if PYSIDE6_AVAILABLE:
                 self.controller.queue_manager.on_queue_summary = self.signals.queue_summary.emit
                 self.controller.queue_manager.on_job_completed = self.signals.job_completed.emit
 
-            self.setMinimumSize(1120, 760)
+            self.setMinimumSize(1020, 690)
             self.preset_cards: dict[PresetId, PresetCardWidget] = {}
             self.nav_buttons: list[QtWidgets.QPushButton] = []
 
@@ -399,6 +423,7 @@ if PYSIDE6_AVAILABLE:
                 side_v.addWidget(btn)
                 self.nav_buttons.append(btn)
 
+            self.btn_nav_convert.hide()  # Convert is now a dashboard choice.
             side_v.addStretch(1)
 
             # Language & Theme quick selectors
@@ -434,16 +459,19 @@ if PYSIDE6_AVAILABLE:
             scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
 
             page = QtWidgets.QWidget()
+            page.setObjectName("DashboardPage")
             v = QtWidgets.QVBoxLayout(page)
-            v.setContentsMargins(28, 24, 28, 24)
-            v.setSpacing(16)
+            v.setContentsMargins(20, 16, 20, 16)
+            v.setSpacing(10)
 
             self.header_title = QtWidgets.QLabel()
             self.header_title.setObjectName("HeadingLabel")
             self.header_subtitle = QtWidgets.QLabel()
             self.header_subtitle.setObjectName("SubheadingLabel")
             v.addWidget(self.header_title)
-            v.addWidget(self.header_subtitle)
+            # The sidebar and drop zone already explain the product; avoid
+            # stacking a second marketing sentence above the work area.
+            self.header_subtitle.hide()
 
             # Drag and drop zone
             self.drop_zone = DragDropVideoZone()
@@ -470,12 +498,16 @@ if PYSIDE6_AVAILABLE:
             self.file_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
             self.file_table.verticalHeader().setVisible(False)
             self.file_table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-            self.file_table.setColumnWidth(0, 100)
+            self.file_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.horizontalHeader().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.file_table.setColumnWidth(0, 82)
+            self.file_table.setColumnWidth(2, 215)
+            self.file_table.setColumnWidth(3, 146)
             self.file_table.setMinimumHeight(140)
-            self.file_table.setMaximumHeight(310)
-            self.file_table.setIconSize(QtCore.QSize(88, 50))
+            self.file_table.setMaximumHeight(225)
+            self.file_table.setIconSize(QtCore.QSize(74, 44))
+            self.file_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.file_table.cellDoubleClicked.connect(self._preview_input_row)
             v.addWidget(self.file_table)
             self.file_table_title.setVisible(False)
@@ -493,7 +525,7 @@ if PYSIDE6_AVAILABLE:
             self.preset_disclaimer_label = QtWidgets.QLabel()
             self.preset_disclaimer_label.setObjectName("MutedLabel")
             v.addWidget(self.preset_section_label)
-            v.addWidget(self.preset_disclaimer_label)
+            self.preset_disclaimer_label.hide()
 
             cards_row = QtWidgets.QHBoxLayout()
             cards_row.setSpacing(12)
@@ -516,7 +548,7 @@ if PYSIDE6_AVAILABLE:
             # Interactive comparison table: a compact alternative to the existing cards.
             self.preset_comparison_title = QtWidgets.QLabel()
             self.preset_comparison_title.setObjectName("HeadingLabel")
-            v.addWidget(self.preset_comparison_title)
+            self.preset_comparison_title.hide()
             self.preset_table = QtWidgets.QTableWidget(len(PresetId), 4)
             self.preset_table.verticalHeader().setVisible(False)
             self.preset_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -549,6 +581,7 @@ if PYSIDE6_AVAILABLE:
             self.preference_message.setObjectName("MutedLabel")
             self.preference_message.setWordWrap(True)
             v.addWidget(self.preference_message)
+            self.preference_message.setVisible(False)
             self.encoding_details_label = QtWidgets.QLabel()
             self.encoding_details_label.setObjectName("SubheadingLabel")
             self.encoding_details_label.setWordWrap(True)
@@ -665,32 +698,49 @@ if PYSIDE6_AVAILABLE:
             self.btn_start_compress.clicked.connect(self._start_compression_batch)
 
 
+            # Keep the always-needed controls and start button in a small card.
+            # Image profiles, suffix, overwrite and power actions are opt-in
+            # progressive disclosure, not a form users must scroll through.
             b_layout.addWidget(self.operation_label, 0, 0)
             b_layout.addWidget(self.operation_combo, 0, 1, 1, 3)
             b_layout.addWidget(self.lbl_compat, 1, 0)
-
             b_layout.addWidget(self.compat_combo, 1, 1)
             b_layout.addWidget(self.lbl_format, 1, 2)
             b_layout.addWidget(self.format_combo, 1, 3)
+            b_layout.addWidget(self.lbl_out_dir, 2, 0)
+            b_layout.addWidget(self.out_dir_edit, 2, 1, 1, 2)
+            b_layout.addWidget(self.btn_browse_out, 2, 3)
+            b_layout.addWidget(self.btn_save_out_default, 3, 1, 1, 3)
+            b_layout.addWidget(self.btn_start_compress, 4, 0, 1, 4)
 
-            b_layout.addWidget(self.lbl_image_format, 2, 0)
-            b_layout.addWidget(self.image_format_combo, 2, 1)
-            b_layout.addWidget(self.lbl_image_preset, 2, 2)
-            b_layout.addWidget(self.image_preset_combo, 2, 3)
-            b_layout.addWidget(self.lbl_image_quality, 3, 0)
-            b_layout.addWidget(self.image_quality_spin, 3, 1)
-            b_layout.addWidget(self.lbl_suffix, 4, 0)
-            b_layout.addWidget(self.suffix_edit, 4, 1)
-            b_layout.addWidget(self.lbl_collision, 4, 2)
-            b_layout.addWidget(self.output_policy_combo, 4, 3)
-            b_layout.addWidget(self.lbl_out_dir, 5, 0)
-            b_layout.addWidget(self.out_dir_edit, 5, 1, 1, 2)
-            b_layout.addWidget(self.btn_browse_out, 5, 3)
-            b_layout.addWidget(self.btn_save_out_default, 6, 1, 1, 3)
-            b_layout.addWidget(self.lbl_after, 7, 0)
-            b_layout.addWidget(self.after_action_combo, 7, 1, 1, 3)
-            b_layout.addWidget(self.btn_start_compress, 8, 0, 1, 4)
+            self.btn_toggle_export_options = QtWidgets.QPushButton()
+            self.btn_toggle_export_options.setCheckable(True)
+            self.export_options = QtWidgets.QFrame()
+            self.export_options.setObjectName("CardFrame")
+            options_layout = QtWidgets.QGridLayout(self.export_options)
+            options_layout.setContentsMargins(16, 12, 16, 12)
+            options_layout.setHorizontalSpacing(12)
+            options_layout.setVerticalSpacing(10)
+            options_layout.addWidget(self.lbl_image_format, 0, 0)
+            options_layout.addWidget(self.image_format_combo, 0, 1)
+            options_layout.addWidget(self.lbl_image_preset, 0, 2)
+            options_layout.addWidget(self.image_preset_combo, 0, 3)
+            options_layout.addWidget(self.lbl_image_quality, 1, 0)
+            options_layout.addWidget(self.image_quality_spin, 1, 1)
+            options_layout.addWidget(self.lbl_suffix, 2, 0)
+            options_layout.addWidget(self.suffix_edit, 2, 1)
+            options_layout.addWidget(self.lbl_collision, 2, 2)
+            options_layout.addWidget(self.output_policy_combo, 2, 3)
+            options_layout.addWidget(self.lbl_after, 3, 0)
+            options_layout.addWidget(self.after_action_combo, 3, 1, 1, 3)
+            self.export_options.setVisible(False)
+            self.btn_toggle_export_options.toggled.connect(self.export_options.setVisible)
+            self.btn_toggle_export_options.toggled.connect(
+                lambda _checked: self._refresh_export_toggle_caption()
+            )
             v.addWidget(bottom_card)
+            v.addWidget(self.btn_toggle_export_options)
+            v.addWidget(self.export_options)
 
             # Expandable Advanced Settings Panel
             self.btn_toggle_advanced = QtWidgets.QPushButton()
@@ -950,7 +1000,7 @@ if PYSIDE6_AVAILABLE:
             self.drop_zone.btn_add_folder.setText(t("btn_add_folder"))
             self.drop_zone.btn_clear.setText(t("btn_clear_selection"))
             self.drop_zone.btn_inspect.setText(t("btn_inspect_frames"))
-            self.file_table_title.setText(t("import_preview_header"))
+            self.file_table_title.setText(t("import_preview_header").split("(")[0].strip())
             self.file_table.setHorizontalHeaderLabels([
                 t("import_preview_col"), t("import_filename_col"),
                 t("import_info_col"), t("import_action_col"),
@@ -959,7 +1009,11 @@ if PYSIDE6_AVAILABLE:
             self._last_import_paths = ()
             self._refresh_imported_file_table()
 
-            self.preset_section_label.setText(t("preset_section_title"))
+            self.preset_section_label.setText(
+                "โหมดบีบอัด • เลือกแถวที่เหมาะกับคุณ"
+                if self.controller.translator.language == "th"
+                else "Compression presets • choose a row"
+            )
 
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
 
@@ -1031,6 +1085,13 @@ if PYSIDE6_AVAILABLE:
             self.image_quality_spin.setEnabled(
                 self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
             )
+            self.btn_toggle_export_options.setText(
+                ("ตั้งค่า Export เพิ่มเติม ▴" if self.btn_toggle_export_options.isChecked()
+                 else "ตั้งค่า Export เพิ่มเติม ▾")
+                if self.controller.translator.language == "th"
+                else ("More export settings ▴" if self.btn_toggle_export_options.isChecked()
+                      else "More export settings ▾")
+            )
             self.btn_start_compress.setText(t("btn_start_compress"))
             self._on_operation_changed()
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
@@ -1083,6 +1144,7 @@ if PYSIDE6_AVAILABLE:
                     with QtCore.QSignalBlocker(preference):
                         preference.setChecked(False)
                 self.preference_message.setText(self.controller.translator.t("pref_info"))
+                self.preference_message.setVisible(False)
             with QtCore.QSignalBlocker(self.preset_table):
                 self.preset_table.selectRow(list(PresetId).index(preset_id))
             self._refresh_encoding_details()
@@ -1098,6 +1160,7 @@ if PYSIDE6_AVAILABLE:
             speed = self.pref_speed.isChecked()
             if not (quality or small or speed):
                 self.preference_message.setText(self.controller.translator.t("pref_info"))
+                self.preference_message.setVisible(False)
                 return
             if small and quality:
                 recommended = PresetId.BEST_BALANCE
@@ -1108,6 +1171,7 @@ if PYSIDE6_AVAILABLE:
             else:
                 recommended = PresetId.BEST_QUALITY
             self._on_preset_selected(recommended, from_preferences=True)
+            self.preference_message.setVisible(True)
             self.preference_message.setText(
                 self.controller.translator.t("pref_conflict")
                 if sum((quality, small, speed)) > 1
@@ -1265,12 +1329,17 @@ if PYSIDE6_AVAILABLE:
                     details += f" • {v.resolution_label} • {v.codec_name} • {v.fps:.1f}fps"
                 elif media.media_kind == "image":
                     details += f" • Photo {media.image_width}x{media.image_height} • {media.container_format.upper()}"
-                self.file_table.setItem(row, 2, QtWidgets.QTableWidgetItem(details))
+                details_item = QtWidgets.QTableWidgetItem(details)
+                details_item.setToolTip(details)
+                self.file_table.setItem(row, 2, details_item)
                 actions = QtWidgets.QWidget()
                 buttons = QtWidgets.QHBoxLayout(actions)
                 buttons.setContentsMargins(2, 1, 2, 1)
-                open_btn = QtWidgets.QPushButton(t("import_open"))
-                remove_btn = QtWidgets.QPushButton(t("import_remove"))
+                open_btn = QtWidgets.QToolButton()
+                open_btn.setText(t("import_open"))
+                remove_btn = QtWidgets.QToolButton()
+                remove_btn.setText("✕")
+                remove_btn.setToolTip(t("import_remove"))
                 open_btn.clicked.connect(lambda _checked=False, p=path: self._open_input_file(p))
                 remove_btn.clicked.connect(lambda _checked=False, p=path: self._remove_imported_file(p))
                 buttons.addWidget(open_btn)
@@ -1317,7 +1386,7 @@ if PYSIDE6_AVAILABLE:
             if pixmap.isNull():
                 return
             pixmap = pixmap.scaled(
-                88, 50, Qt.AspectRatioMode.KeepAspectRatio,
+                74, 44, Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             for row in range(self.file_table.rowCount()):
@@ -1391,7 +1460,8 @@ if PYSIDE6_AVAILABLE:
                 )
             )
             self.file_summary_label.setText(
-                f"Selected: {len(files)} file(s) ({format_bytes(total_bytes)}) — Primary: {first.file_path.name} [{v_desc}]"
+                f"{'เลือก' if self.controller.translator.language == 'th' else 'Selected'} "
+                f"{len(files)} files • {format_bytes(total_bytes)} • {first.file_path.name} [{v_desc}]"
             )
 
             video = next((m for m in files if m.media_kind == "video"), None)
@@ -1421,6 +1491,14 @@ if PYSIDE6_AVAILABLE:
                 self.warning_banner.setVisible(True)
             else:
                 self.warning_banner.setVisible(False)
+
+        def _refresh_export_toggle_caption(self) -> None:
+            thai = self.controller.translator.language == "th"
+            expanded = self.btn_toggle_export_options.isChecked()
+            self.btn_toggle_export_options.setText(
+                ("ตั้งค่า Export เพิ่มเติม ▴" if expanded else "ตั้งค่า Export เพิ่มเติม ▾")
+                if thai else ("More export settings ▴" if expanded else "More export settings ▾")
+            )
 
         def _on_output_preferences_changed(self, *_args: object) -> bool:
             try:
@@ -1552,40 +1630,78 @@ if PYSIDE6_AVAILABLE:
                     actions = QtWidgets.QWidget()
                     actions_row = QtWidgets.QHBoxLayout(actions)
                     actions_row.setContentsMargins(1, 0, 1, 0)
-                    for title_key, callback in (
-                        ("queue_open", lambda r=result: self._open_output_file(r)),
-                        ("queue_folder", lambda r=result: self._open_output_folder(r)),
-                        ("queue_compare", lambda r=result: self._show_completed_compare(r)),
-                    ):
-                        btn = QtWidgets.QPushButton(self.controller.translator.t(title_key))
-                        btn.clicked.connect(lambda _checked=False, f=callback: f())
-                        actions_row.addWidget(btn)
+                    t = self.controller.translator.t
+                    # Keep the Open control compact but let the user choose
+                    # which distinct file to open: BEFORE or AFTER.
+                    open_btn = QtWidgets.QPushButton(t("queue_open") + " ▾")
+                    open_menu = QtWidgets.QMenu(open_btn)
+                    original = result.source_backup_path or result.input_path
+                    before_action = open_menu.addAction(
+                        "Before • ต้นฉบับ" if self.controller.translator.language == "th"
+                        else "Before • Original"
+                    )
+                    before_action.setEnabled(original.is_file())
+                    before_action.triggered.connect(
+                        lambda _checked=False, p=original: self._open_file_path(p)
+                    )
+                    after_action = open_menu.addAction(
+                        "After • ผลลัพธ์" if self.controller.translator.language == "th"
+                        else "After • Output"
+                    )
+                    after_action.setEnabled(result.output_path.is_file())
+                    after_action.triggered.connect(
+                        lambda _checked=False, p=result.output_path: self._open_file_path(p)
+                    )
+                    open_btn.setMenu(open_menu)
+                    actions_row.addWidget(open_btn)
+                    locate_btn = QtWidgets.QPushButton(t("queue_folder"))
+                    locate_btn.setToolTip("Open file location • เลือกไฟล์ผลลัพธ์ใน Explorer")
+                    locate_btn.clicked.connect(
+                        lambda _checked=False, r=result: self._open_output_folder(r)
+                    )
+                    actions_row.addWidget(locate_btn)
+                    compare_btn = QtWidgets.QPushButton(t("queue_compare"))
+                    compare_btn.clicked.connect(
+                        lambda _checked=False, r=result: self._show_completed_compare(r)
+                    )
+                    actions_row.addWidget(compare_btn)
                     self.queue_table.setCellWidget(row, 7, actions)
-                    self.queue_table.setColumnWidth(7, 330)
+                    self.queue_table.setColumnWidth(7, 310)
             elif self.queue_table.cellWidget(row, 7) is not None:
                 self.queue_table.removeCellWidget(row, 7)
 
+        def _open_file_path(self, path: Path) -> None:
+            if not path.is_file():
+                QtWidgets.QMessageBox.warning(
+                    self, "PocketVideo", "ไม่พบไฟล์ • ตรวจสอบไดรฟ์ USB/HDD"
+                )
+                return
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(path)))
+
         def _open_output_file(self, result: JobResultComparison) -> None:
-            if result.output_path.is_file():
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path)))
-            else:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output file is missing.")
+            self._open_file_path(result.output_path)
 
         def _open_output_folder(self, result: JobResultComparison) -> None:
-            if result.output_path.parent.is_dir():
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path.parent)))
-            else:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output folder is missing.")
+            try:
+                reveal_file_in_location(result.output_path)
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
 
         def _show_completed_compare(self, result: JobResultComparison) -> None:
-            original_path = result.source_backup_path or result.input_path
-            if not original_path.is_file() or not result.output_path.is_file():
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Input or output file is missing.")
+            original = result.source_backup_path or result.input_path
+            if not original.is_file() or not result.output_path.is_file():
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "ไฟล์ Before/After ไม่อยู่แล้ว")
                 return
-            if not self.controller.binaries:
-                QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
-                return
-            dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            if original.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
+                dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            else:
+                if not self.controller.binaries:
+                    QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
+                    return
+                from pocketvideo.ui.video_compare import SynchronizedVideoCompareDialog
+                dlg = SynchronizedVideoCompareDialog(
+                    original, result.output_path, self.controller.binaries, self
+                )
             dlg.exec()
 
         def _find_or_create_job_row(self, job_id: str) -> int:
