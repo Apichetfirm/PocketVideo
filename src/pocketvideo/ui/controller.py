@@ -362,6 +362,7 @@ class AppController:
                 image_quality=self.image_quality,
                 output_policy=self.output_policy,
                 source_fingerprint=source_fp,
+                skip_larger_outputs=self.settings.skip_larger_outputs,
             )
             specs.append((spec, meta))
 

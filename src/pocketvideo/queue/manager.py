@@ -435,22 +435,58 @@ class QueueManager:
                         target=_read_stderr, args=(proc.stderr, pass_stderr), daemon=True
                     )
                     stderr_thread.start()
+                    # Independent watchdog: the FFmpeg progress pipe may stop
+                    # producing lines when external storage disappears.
+                    drive_lost = threading.Event()
+                    watchdog_stop = threading.Event()
 
-                    assert proc.stdout is not None
-                    for out_line in proc.stdout:
-                        if job_id in self._cancel_flags:
+                    def monitor_storage() -> None:
+                        while not watchdog_stop.wait(1.0):
+                            if proc.poll() is not None:
+                                return
                             try:
-                                proc.terminate()
+                                available = (
+                                    item.spec.input_path.is_file()
+                                    and item.spec.output_path.parent.is_dir()
+                                )
                             except OSError:
-                                pass
-                            break
-                        prog = parser.feed_line(out_line)
-                        if prog:
-                            item.progress = prog
-                            self._notify_item(item)
+                                available = False
+                            if not available:
+                                self._storage_paused = True
+                                drive_lost.set()
+                                try:
+                                    proc.terminate()
+                                except OSError:
+                                    pass
+                                return
 
-                    proc.wait(timeout=30)
-                    stderr_thread.join(timeout=5)
+                    watchdog = threading.Thread(
+                        target=monitor_storage, name="PocketVideoStorageWatch",
+                        daemon=True,
+                    )
+                    watchdog.start()
+                    assert proc.stdout is not None
+                    try:
+                        for out_line in proc.stdout:
+                            if job_id in self._cancel_flags:
+                                try:
+                                    proc.terminate()
+                                except OSError:
+                                    pass
+                                break
+                            prog = parser.feed_line(out_line)
+                            if prog:
+                                item.progress = prog
+                                self._notify_item(item)
+                        proc.wait(timeout=30)
+                    finally:
+                        watchdog_stop.set()
+                        watchdog.join(timeout=2)
+                        stderr_thread.join(timeout=5)
+                    if drive_lost.is_set():
+                        raise StorageDisconnectedError(
+                            "USB/HDD disappeared during FFmpeg encoding."
+                        )
                     rc = proc.returncode
 
                 stderr_accum.extend(pass_stderr)
@@ -486,7 +522,13 @@ class QueueManager:
                         f"diverges from input ({item.input_metadata.duration_seconds:.1f}s)."
                     )
 
-            plan.final_output_path.parent.mkdir(parents=True, exist_ok=True)
+            if (item.spec.skip_larger_outputs
+                    and item.spec.operation_mode == OperationMode.COMPRESS
+                    and plan.temp_output_path.stat().st_size >= item.input_metadata.file_size_bytes):
+                raise LargerOutputSkipped(
+                    "Encoded output is not smaller than the original; kept source."
+                )
+            confirm_source(item.spec.input_path, item.spec.source_fingerprint)
             try:
                 actual_output_path, preserved_backup = promote_verified_output(
                     plan.temp_output_path, plan.final_output_path,
@@ -538,6 +580,11 @@ class QueueManager:
             if self.on_job_completed:
                 self.on_job_completed(comparison)
 
+        except LargerOutputSkipped as exc:
+            item.status = JobStatus.CANCELLED
+            item.error_message = str(exc)
+            item.warnings.append(str(exc))
+            self._notify_item(item)
         except InterruptedError:
             item.status = JobStatus.CANCELLED
             item.error_message = "Cancelled by user."
@@ -639,6 +686,12 @@ class QueueManager:
             self._notify_item(item)
             if item.spec.job_id in self._cancel_flags:
                 raise InterruptedError("Image conversion cancelled.")
+            if (item.spec.skip_larger_outputs
+                    and item.spec.operation_mode == OperationMode.COMPRESS
+                    and staged.stat().st_size >= item.input_metadata.file_size_bytes):
+                raise LargerOutputSkipped(
+                    "Compressed image would be larger than the original; kept source."
+                )
             actual, backup = promote_verified_output(
                 staged, dst, src, item.spec.output_policy,
                 item.spec.source_fingerprint,

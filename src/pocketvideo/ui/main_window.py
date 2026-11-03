@@ -690,6 +690,9 @@ if PYSIDE6_AVAILABLE:
                 max(0, self.output_policy_combo.findData(self.controller.output_policy.value))
             )
             self.output_policy_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
+            self.skip_larger_check = QtWidgets.QCheckBox()
+            self.skip_larger_check.setChecked(self.controller.settings.skip_larger_outputs)
+            self.skip_larger_check.toggled.connect(self._on_output_preferences_changed)
             self.lbl_after = QtWidgets.QLabel()
             self.after_action_combo = QtWidgets.QComboBox()
             for action in AfterExportAction:
@@ -738,8 +741,9 @@ if PYSIDE6_AVAILABLE:
             options_layout.addWidget(self.suffix_edit, 2, 1)
             options_layout.addWidget(self.lbl_collision, 2, 2)
             options_layout.addWidget(self.output_policy_combo, 2, 3)
-            options_layout.addWidget(self.lbl_after, 3, 0)
-            options_layout.addWidget(self.after_action_combo, 3, 1, 1, 3)
+            options_layout.addWidget(self.skip_larger_check, 3, 0, 1, 4)
+            options_layout.addWidget(self.lbl_after, 4, 0)
+            options_layout.addWidget(self.after_action_combo, 4, 1, 1, 3)
             self.export_options.setVisible(False)
             self.btn_toggle_export_options.toggled.connect(self.export_options.setVisible)
             self.btn_toggle_export_options.toggled.connect(
@@ -1089,6 +1093,11 @@ if PYSIDE6_AVAILABLE:
                  "output_policy_replace_source")
             ):
                 self.output_policy_combo.setItemText(row, t(key))
+            self.skip_larger_check.setText(
+                "ไม่บันทึกผลบีบอัดที่ใหญ่กว่าต้นฉบับ"
+                if self.controller.translator.language == "th"
+                else "Discard compressed output if not smaller than original"
+            )
             self.lbl_after.setText(t("after_export_label"))
             for row, key in enumerate(
                 ("after_export_none", "after_export_sleep", "after_export_shutdown")
@@ -1579,6 +1588,7 @@ if PYSIDE6_AVAILABLE:
                 self.controller.settings.after_export_action = AfterExportAction(
                     self.after_action_combo.currentData()
                 ).value
+                self.controller.settings.skip_larger_outputs = self.skip_larger_check.isChecked()
                 self.controller.settings_mgr.save_settings()
                 self.image_quality_spin.setEnabled(
                     self.image_preset_combo.currentData() == ImagePreset.CUSTOM.value
