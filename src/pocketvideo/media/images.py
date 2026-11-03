@@ -18,20 +18,27 @@ IMAGE_OUTPUT_FORMATS = ("jpeg", "png", "webp", "heic", "avif")
 _HEIF_READY = False
 
 
-def initialize_image_plugins() -> None:
+def initialize_image_plugins(*, require_heif: bool = False) -> bool:
+    """Register available plugins, but never block ordinary JPEG/PNG/WebP images."""
     global _HEIF_READY
     if _HEIF_READY:
-        return
+        return True
     try:
-        from pillow_heif import register_heif_opener, register_avif_opener
-        register_heif_opener(thumbnails=False)
-        register_avif_opener(thumbnails=False)
+        import pillow_heif
+        pillow_heif.register_heif_opener(thumbnails=False)
+        # Some pillow-heif versions omit an AVIF plugin; Pillow itself may
+        # provide AVIF. Never make successful HEIF registration depend on it.
+        register_avif = getattr(pillow_heif, "register_avif_opener", None)
+        if callable(register_avif):
+            register_avif(thumbnails=False)
         _HEIF_READY = True
+        return True
     except (ImportError, OSError, RuntimeError) as exc:
-        raise RuntimeError(
-            "HEIC/HEIF/AVIF support is unavailable. Install the verified pillow-heif "
-            "Windows codec wheel or use JPEG/PNG/WebP."
-        ) from exc
+        if require_heif:
+            raise RuntimeError(
+                "HEIC/HEIF support is unavailable; check bundled pillow-heif Windows codecs."
+            ) from exc
+        return False
 
 
 def _load_pillow():
@@ -44,7 +51,9 @@ def _load_pillow():
 
 def inspect_image(path: Path) -> MediaMetadata:
     Image, _ = _load_pillow()
-    initialize_image_plugins()
+    initialize_image_plugins(
+        require_heif=Path(path).suffix.lower() in (".heic", ".heif")
+    )
     path = Path(path).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"Image is missing: {path}")
@@ -84,7 +93,10 @@ def encode_image(
 ) -> tuple[int, int, list[str]]:
     """Encode to the same disk as the output; caller verifies and safely promotes."""
     Image, ImageOps = _load_pillow()
-    initialize_image_plugins()
+    initialize_image_plugins(
+        require_heif=spec.target_container.lower() in ("heic",)
+        or spec.input_path.suffix.lower() in (".heic", ".heif")
+    )
     src = spec.input_path
     dst_fmt = spec.target_container.lower()
     if dst_fmt not in IMAGE_OUTPUT_FORMATS:
@@ -150,7 +162,9 @@ def encode_image(
 
 def thumbnail_png(source: Path, destination: Path, size: tuple[int, int] = (176, 100)) -> Path:
     Image, ImageOps = _load_pillow()
-    initialize_image_plugins()
+    initialize_image_plugins(
+        require_heif=source.suffix.lower() in (".heic", ".heif")
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as im:
         im.load()

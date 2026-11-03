@@ -150,6 +150,15 @@ class QueueManager:
         with self._lock:
             return self._items.get(job_id)
 
+    def is_idle(self) -> bool:
+        """True only after every worker has exited, not merely after a 100% signal."""
+        with self._lock:
+            return self._active_workers == 0 and all(
+                self._items[jid].status in (
+                    JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED,
+                ) for jid in self._order
+            )
+
     def enqueue(
         self,
         spec: EncodingJobSpec,

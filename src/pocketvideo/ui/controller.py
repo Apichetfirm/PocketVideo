@@ -22,6 +22,7 @@ from pocketvideo.core.models import (
     TargetSizePlan,
     ImagePreset,
     OutputPolicy,
+    JobStatus,
 )
 from pocketvideo.media.binaries import BinaryPaths, resolve_binaries
 from pocketvideo.media.encoder import (
@@ -318,6 +319,9 @@ class AppController:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         reserved: set[Path] = set()
+        for previous in self.queue_manager.items():
+            if previous.status not in (JobStatus.CANCELLED, JobStatus.FAILED):
+                reserved.add(previous.spec.output_path)
         specs: list[tuple[EncodingJobSpec, MediaMetadata]] = []
         for meta in self.selected_files:
             is_image = meta.media_kind == "image"

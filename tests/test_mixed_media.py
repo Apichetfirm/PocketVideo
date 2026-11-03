@@ -56,7 +56,7 @@ class OutputSafetyTests(unittest.TestCase):
                 staged, root / "unused.jpg", source,
                 OutputPolicy.REPLACE_SOURCE_BACKUP, expected,
             )
-            self.assertEqual(result, source)
+            self.assertEqual(result.resolve(), source.resolve())
             self.assertIsNotNone(backup)
             self.assertEqual(source.read_bytes(), b"new verified payload")
             self.assertEqual(backup.read_bytes(), b"original payload")
@@ -175,7 +175,7 @@ class MixedMediaIntegrationTests(unittest.TestCase):
         items = c.enqueue_current_batch(auto_start=True)
         self.assertTrue(c.queue_manager.wait_for_all(timeout=90))
         self.assertEqual(items[0].status, JobStatus.COMPLETED, items[0].error_message)
-        self.assertEqual(items[0].result.output_path, self.img.resolve())
+        self.assertEqual(items[0].result.output_path.resolve(), self.img.resolve())
         backups = list(self.root.glob("*.pocketvideo_backup_*.jpg"))
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), original)

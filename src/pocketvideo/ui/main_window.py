@@ -1420,6 +1420,7 @@ if PYSIDE6_AVAILABLE:
             selected_op = self.operation_combo.currentData()
             try:
                 items = self.controller.enqueue_current_batch(
+                    auto_start=False,
                     operation_mode=(
                         OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
                         else OperationMode.COMPRESS
@@ -1440,6 +1441,8 @@ if PYSIDE6_AVAILABLE:
             )
             self._power_prompt_pending = False
             self._switch_page(2)
+            if self.controller.queue_manager:
+                self.controller.queue_manager.start()
 
         def _go_to_convert_on_main(self) -> None:
             self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
@@ -1542,7 +1545,10 @@ if PYSIDE6_AVAILABLE:
                 return
             # Never power off after a failed, skipped or cancelled job, or while
             # any older queue job is still active.
-            if all(x == JobStatus.COMPLETED for x in statuses.values()):
+            if (
+                all(x == JobStatus.COMPLETED for x in statuses.values())
+                and self.controller.queue_manager.is_idle()
+            ):
                 self._power_prompt_pending = True
                 QtCore.QTimer.singleShot(0, self._show_post_export_countdown)
 
