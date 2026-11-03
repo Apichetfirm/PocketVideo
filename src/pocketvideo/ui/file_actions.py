@@ -9,8 +9,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-from PySide6 import QtCore, QtGui
-
 
 def reveal_file_in_location(file_path: Path) -> bool:
     path = Path(file_path).resolve()
@@ -26,6 +24,7 @@ def reveal_file_in_location(file_path: Path) -> bool:
         )
         return True
     # Best-effort fallback for developer/test environments outside Windows.
+    from PySide6 import QtCore, QtGui
     return bool(QtGui.QDesktopServices.openUrl(
         QtCore.QUrl.fromLocalFile(str(path.parent))
     ))
