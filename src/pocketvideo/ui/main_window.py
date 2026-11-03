@@ -332,6 +332,7 @@ if PYSIDE6_AVAILABLE:
             self._power_batch_ids: set[str] = set()
             self._power_batch_action = AfterExportAction.NONE
             self._power_prompt_pending = False
+            self._power_verified_outputs: list[Path] = []
             self._usb_error_alerted: set[str] = set()
             self._thumbnail_dir = Path(tempfile.gettempdir()) / "pocketvideo_previews"
 
@@ -1204,13 +1205,20 @@ if PYSIDE6_AVAILABLE:
             adv.audio_codec = str(self.adv_audio_combo.currentData() or "copy")
 
         def _on_paths_dropped(self, paths: list[str]) -> None:
+            errors: list[str] = []
             for p_str in paths:
                 p = Path(p_str)
-                if p.is_dir():
-                    self.controller.add_folder(p)
-                else:
-                    self.controller.add_files([p])
+                _, failed = (
+                    self.controller.add_folder(p) if p.is_dir()
+                    else self.controller.add_files([p])
+                )
+                errors.extend(failed)
             self._refresh_selection_summary()
+            if errors:
+                QtWidgets.QMessageBox.warning(
+                    self, "PocketVideo",
+                    self.controller.translator.t("import_error") + "\n" + "\n".join(errors[:12]),
+                )
 
 
         def _preview_input_row(self, row: int, _column: int) -> None:
@@ -1591,12 +1599,23 @@ if PYSIDE6_AVAILABLE:
             }
             if not self._power_batch_ids.issubset(statuses):
                 return
+            if any(x in (JobStatus.FAILED, JobStatus.CANCELLED) for x in statuses.values()):
+                # A failed export disarms power actions, including on a later
+                # Retry Failed. Starting a NEW batch requires confirmation again.
+                self._power_batch_action = AfterExportAction.NONE
+                self._power_batch_ids.clear()
+                return
             # Never power off after a failed, skipped or cancelled job, or while
             # any older queue job is still active.
             if (
                 all(x == JobStatus.COMPLETED for x in statuses.values())
                 and self.controller.queue_manager.is_idle()
             ):
+                self._power_verified_outputs = [
+                    x.result.output_path
+                    for x in self.controller.queue_manager.items()
+                    if x.result is not None
+                ]
                 self._power_prompt_pending = True
                 QtCore.QTimer.singleShot(0, self._show_post_export_countdown)
 
@@ -1634,6 +1653,13 @@ if PYSIDE6_AVAILABLE:
             tick()
             timer.start(1000)
             if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+                if not self._power_verified_outputs or any(
+                    not p.is_file() for p in self._power_verified_outputs
+                ):
+                    QtWidgets.QMessageBox.warning(
+                        self, "PocketVideo", "Exported files are no longer accessible; power action cancelled."
+                    )
+                    return
                 try:
                     run_after_export(action, user_confirmed=True)
                 except (OSError, PermissionError, RuntimeError) as exc:
