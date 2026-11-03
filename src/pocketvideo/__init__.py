@@ -2,5 +2,5 @@
 
 __version__ = "1.1.0"
 __app_name__ = "PocketVideo"
-__author__ = "PocketVideo Contributors"
+__author__ = "Firm Impulse"
 __license__ = "GPL-3.0-or-later"

@@ -373,6 +373,12 @@ if PYSIDE6_AVAILABLE:
             self.brand_sub.setObjectName("MutedLabel")
             side_v.addWidget(self.brand_label)
             side_v.addWidget(self.brand_sub)
+            # Visible creator credit; keep the original open-source attribution
+            # in repository/licensing metadata separately.
+            self.creator_credit_label = QtWidgets.QLabel("Created by Firm Impulse")
+            self.creator_credit_label.setObjectName("MutedLabel")
+            self.creator_credit_label.setAccessibleName("Creator: Firm Impulse")
+            side_v.addWidget(self.creator_credit_label)
             side_v.addSpacing(14)
 
             self.btn_nav_dashboard = QtWidgets.QPushButton()

@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 requires-python = ">=3.11"
 authors = [
-    {name = "PocketVideo Contributors"}
+    {name = "Firm Impulse"}
 ]
 dependencies = [
     "PySide6>=6.6.0,<7.0.0",
