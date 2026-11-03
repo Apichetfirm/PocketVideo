@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import os
+from PyInstaller.utils.hooks import collect_dynamic_libs, copy_metadata
 
 repo_root = Path(SPECPATH).resolve().parent
 src_root = repo_root / "src"
@@ -19,6 +20,10 @@ datas_list = [
     (str(repo_root / "THIRD_PARTY_NOTICES.md"), "."),
     (str(repo_root / "README.md"), "."),
 ]
+# Bundle native HEIF codecs and their package metadata. The packaged HEIC
+# smoke test below must work without relying on source Python modules.
+binaries_list.extend(collect_dynamic_libs("pillow_heif"))
+datas_list.extend(copy_metadata("pillow-heif"))
 
 block_cipher = None
 

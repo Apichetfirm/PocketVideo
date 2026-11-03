@@ -1,6 +1,8 @@
 # PocketVideo — Open-Source Windows Video Compressor & Converter
 
-**PocketVideo** is a free, open-source, 100% offline Windows 10/11 (x64) desktop application for compressing large video files recorded on Android phones and converting between media formats while preserving visible image quality.
+**PocketVideo** is a free, open-source, 100% offline Windows 10/11 (x64) desktop application for converting and compressing mixed Android phone **videos and still photos**, including HEIC/HEIF when the bundled codec backend is present.
+
+> **v1.1.0 development:** Public v1.0.0 remains available at the Releases page. The code in this branch adds photo compression and safer outputs and is subject to Windows CI and license review before a public v1.1.0 release.
 
 > **Screenshot status:** The previews below were generated with a headless HTML renderer using actual FFmpeg test data. They illustrate the intended layout; they are **not** native Windows/PySide6 screenshots. Each Windows CI build also captures native Qt screenshots as a downloadable workflow artifact for review.
 
@@ -45,7 +47,7 @@ Default interface language is **Thai (`th`)** with one-click switching to **Engl
 - **Honest Resource Controls**: Clearly distinguishes kernel-enforced hard limits (Windows Job Object CPU Rate Control) from best-effort controls (FFmpeg `-threads`, CPU affinity mask, GPU encoder selection, and queue concurrency).
 
 ### 5. Safety, Reliability & Visual Comparison
-- **Never Overwrites Originals**: Writes to temporary `.pocketvideo_tmp_*` files in a separate output directory, verifies output stream integrity and duration via `ffprobe` after encoding, and atomically moves the verified file into place.
+- **Safe Export Policies**: Default **Keep Both** never overwrites input or output files. Opt-in **Replace Existing Output** and **Replace Original** retain the replaced file as a uniquely named `.pocketvideo_backup_*` backup and only promote a verified temporary output. A source-file identity/fingerprint check helps prevent accidental replacement if a USB/HDD disconnects or its file changes.
 - **Before/After Visual Comparison & Sample Preview**: Extracts representative video frames and generates a 2.5-second compressed sample clip so you can inspect fine detail before encoding a multi-gigabyte video.
 
 ## Installation (Windows 10/11 x64)
@@ -92,3 +94,19 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 ## License
 PocketVideo is free and open-source software licensed under the **GNU General Public License v3.0 or later (`GPL-3.0-or-later`)**. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for full details.
+
+## v1.1.0: Mixed Photo + Video Export & Safe Storage
+
+- Drag-and-drop entire folders containing MP4/MOV/MKV, JPEG/JPG, PNG, WebP, AVIF and HEIC/HEIF images. The app inspects each file, shows thumbnails, and adds **both image and video jobs to one queue**.
+- **Video options** remain independent of **image output profiles** (Best Picture / Balanced / Smallest / Fastest / Custom Quality) with output formats JPEG/PNG/WebP/HEIC/AVIF; photo export does not pretend to use video two-pass encoding.
+- HEIC/HEIF encode/decode uses `pillow-heif==1.8.1` (bundled libheif codec). Unsupported encoders fail with clear messages. AVIF availability depends on the installed Pillow/libheif build.
+- Configure filename **suffix**, a **persistent default output folder**, and a collision policy: **Keep Both (default)**, **Skip Existing**, **Replace Destination with Backup**, or **Replace Original with Backup**. Replacing the original requires the **same file format** and extra user confirmation.
+- Source data is preserved when an export fails. The queue halts new work when a source or destination USB/HDD disappears; reconnect and press **Retry Failed**. The saved original is not automatically deleted. An unplug during an atomic file replacement can still require manual recovery from the `.pocketvideo_backup_*` file.
+- Choose **Do Nothing (default)**, **Sleep**, or **Shut Down** after the entire queue is verified successfully. A confirmation before starting and a cancelable 30-second countdown protect against unintended power actions. Failed/canceled jobs prevent triggering.
+- The Windows **CPU Job Object Hard Cap** applies to subprocesses such as **FFmpeg video encoding**. Image encoding uses Pillow in-process and is **not** currently covered by that hard cap. GPU percentages are not hard caps.
+- Safe backups can consume as much or more storage as the original until the user checks the exported result and deletes backups manually.
+- Original filename suffix and export settings are persisted per user. **Power actions never run from the CLI.**
+
+### Third-party codec obligations
+`pillow-heif` binaries include codecs whose license terms may differ from the source package (including GPL and LGPL components); see `THIRD_PARTY_NOTICES.md` and upstream `LICENSES_bundled.txt`. Distributors must confirm binary/source license obligations and applicable HEVC patents before redistributing modified bundles. This is not a claim that all HEIC licensing requirements have been cleared.
+
