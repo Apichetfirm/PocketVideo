@@ -67,7 +67,8 @@ def discover_videos_in_folder(folder: Path, recursive: bool = True) -> list[Path
         for p in iterator
         if p.is_file()
         and p.suffix.lower() in (SUPPORTED_VIDEO_EXTENSIONS | SUPPORTED_IMAGE_EXTENSIONS)
-        and not p.name.startswith(".pocketvideo_tmp_")
+        and not p.name.startswith((".pocketvideo_tmp_", ".pocketvideo_source_stage_"))
+        and ".pocketvideo_backup_" not in p.name
     ]
     return sorted(matches)
 
