@@ -17,6 +17,7 @@ from typing import Callable, Optional
 from pocketvideo.core.models import (
     OutputPolicy,
     EncodingJobSpec,
+    OperationMode,
     JobProgress,
     JobResultComparison,
     JobStatus,

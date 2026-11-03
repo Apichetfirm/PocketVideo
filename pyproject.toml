@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pocketvideo"
-version = "1.1.1"
+version = "1.2.0"
 description = "Open-Source Windows Video Compressor & Converter optimized for Android phone videos"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
