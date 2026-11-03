@@ -598,8 +598,13 @@ if PYSIDE6_AVAILABLE:
 
             self.btn_start_convert = QtWidgets.QPushButton()
             self.btn_start_convert.setObjectName("PrimaryStartButton")
-            self.btn_start_convert.clicked.connect(self._start_conversion_batch)
 
+            self.btn_start_convert.clicked.connect(self._go_to_convert_on_main)
+
+
+            self.convert_help = QtWidgets.QLabel()
+            self.convert_help.setWordWrap(True)
+            cv.addWidget(self.convert_help)
             cv.addWidget(self.chk_smart_remux)
             cv.addWidget(self.convert_mode_banner)
             cv.addWidget(self.btn_start_convert)
@@ -645,9 +650,11 @@ if PYSIDE6_AVAILABLE:
             ctrl_row.addStretch(1)
             v.addLayout(ctrl_row)
 
-            self.queue_table = QtWidgets.QTableWidget(0, 7)
+
+            self.queue_table = QtWidgets.QTableWidget(0, 8)
             self.queue_table.setHorizontalHeaderLabels([
-                "Job ID", "File", "Status", "Progress", "FPS / Speed", "Elapsed / ETA", "Summary / Result"
+
+                "Job ID", "File", "Status", "Progress", "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
             ])
             self.queue_table.horizontalHeader().setStretchLastSection(True)
             self.queue_table.setSelectionBehavior(
@@ -698,11 +705,12 @@ if PYSIDE6_AVAILABLE:
             self.res_mode_combo.addItem("Custom", ResourceMode.CUSTOM.value)
             self.res_mode_combo.currentIndexChanged.connect(self._on_resource_mode_changed)
 
-            self.cpu_cap_spin = QtWidgets.QSpinBox()
-            self.cpu_cap_spin.setRange(10, 100)
-            self.cpu_cap_spin.setSuffix("% (Windows Job Object Hard Cap)")
-            self.cpu_cap_spin.setValue(self.controller.resource_limits.cpu_hard_cap_percent)
-            self.cpu_cap_spin.valueChanged.connect(self._on_resource_controls_edited)
+
+            self.cpu_cap_combo = QtWidgets.QComboBox()
+            for cap in (50, 60, 70, 75, 80, 85, 90, 95, 100):
+                self.cpu_cap_combo.addItem(f"{cap}%", cap)
+            self._set_cpu_cap_selection(self.controller.resource_limits.cpu_hard_cap_percent)
+            self.cpu_cap_combo.currentIndexChanged.connect(self._on_resource_controls_edited)
 
             self.threads_spin = QtWidgets.QSpinBox()
             self.threads_spin.setRange(0, 64)
@@ -732,7 +740,8 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(QtWidgets.QLabel("Resource Mode:"), 0, 0)
             grid.addWidget(self.res_mode_combo, 0, 1)
             grid.addWidget(QtWidgets.QLabel("CPU Hard Cap (%):"), 1, 0)
-            grid.addWidget(self.cpu_cap_spin, 1, 1)
+
+            grid.addWidget(self.cpu_cap_combo, 1, 1)
             grid.addWidget(QtWidgets.QLabel("CPU Thread Count (0=Auto):"), 2, 0)
             grid.addWidget(self.threads_spin, 2, 1)
             grid.addWidget(QtWidgets.QLabel("Concurrent Jobs:"), 3, 0)
@@ -827,8 +836,12 @@ if PYSIDE6_AVAILABLE:
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
 
             self.convert_title.setText(t("nav_convert"))
-            self.btn_start_convert.setText(t("btn_start_convert"))
+
+            self.btn_start_convert.setText(t("convert_go_dashboard"))
+            self.convert_help.setText(t("convert_explanation"))
+
             self.queue_title.setText(t("nav_queue"))
+            self.queue_table.setHorizontalHeaderItem(7, QtWidgets.QTableWidgetItem(t("queue_actions")))
             self.btn_pause_job.setText(t("queue_pause"))
             self.btn_resume_job.setText(t("queue_resume"))
             self.btn_cancel_job.setText(t("queue_cancel"))
@@ -1172,6 +1185,11 @@ if PYSIDE6_AVAILABLE:
             )
             self._switch_page(2)
 
+
+        def _go_to_convert_on_main(self) -> None:
+            self.operation_combo.setCurrentIndex(self.operation_combo.findData("convert"))
+            self._switch_page(0)
+
         def _start_conversion_batch(self) -> None:
             if not self.controller.selected_files:
                 return
@@ -1207,7 +1225,48 @@ if PYSIDE6_AVAILABLE:
                 res_txt = item.error_message
             else:
                 res_txt = item.resource_summary
+
             self.queue_table.setItem(row, 6, QtWidgets.QTableWidgetItem(res_txt))
+            if item.result and item.result.output_path.is_file():
+                if self.queue_table.cellWidget(row, 7) is None:
+                    result = item.result
+                    actions = QtWidgets.QWidget()
+                    actions_row = QtWidgets.QHBoxLayout(actions)
+                    actions_row.setContentsMargins(1, 0, 1, 0)
+                    for title_key, callback in (
+                        ("queue_open", lambda r=result: self._open_output_file(r)),
+                        ("queue_folder", lambda r=result: self._open_output_folder(r)),
+                        ("queue_compare", lambda r=result: self._show_completed_compare(r)),
+                    ):
+                        btn = QtWidgets.QPushButton(self.controller.translator.t(title_key))
+                        btn.clicked.connect(lambda _checked=False, f=callback: f())
+                        actions_row.addWidget(btn)
+                    self.queue_table.setCellWidget(row, 7, actions)
+                    self.queue_table.setColumnWidth(7, 330)
+            elif self.queue_table.cellWidget(row, 7) is not None:
+                self.queue_table.removeCellWidget(row, 7)
+
+        def _open_output_file(self, result: JobResultComparison) -> None:
+            if result.output_path.is_file():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path)))
+            else:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output file is missing.")
+
+        def _open_output_folder(self, result: JobResultComparison) -> None:
+            if result.output_path.parent.is_dir():
+                QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(result.output_path.parent)))
+            else:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Output folder is missing.")
+
+        def _show_completed_compare(self, result: JobResultComparison) -> None:
+            if not result.input_path.is_file() or not result.output_path.is_file():
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "Input or output file is missing.")
+                return
+            if not self.controller.binaries:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", "FFmpeg is unavailable.")
+                return
+            dlg = CompletedVideoCompareDialog(result, self.controller.binaries, self)
+            dlg.exec()
 
         def _find_or_create_job_row(self, job_id: str) -> int:
             for r in range(self.queue_table.rowCount()):
@@ -1270,6 +1329,19 @@ if PYSIDE6_AVAILABLE:
             if self.controller.queue_manager:
                 self.controller.queue_manager.retry_failed()
 
+
+        def _set_cpu_cap_selection(self, value: int) -> None:
+            value = int(value)
+            idx = self.cpu_cap_combo.findData(value)
+            if idx < 0:
+                # Preserve a saved value (including the built-in 40% Light mode)
+                # rather than silently increasing the user's CPU budget.
+                label = self.controller.translator.t("cpu_saved_custom", value=value)
+                self.cpu_cap_combo.addItem(label, value)
+                idx = self.cpu_cap_combo.findData(value)
+            with QtCore.QSignalBlocker(self.cpu_cap_combo):
+                self.cpu_cap_combo.setCurrentIndex(idx)
+
         def _on_resource_mode_changed(self) -> None:
             mode_val = self.res_mode_combo.currentData()
             if mode_val:
@@ -1277,20 +1349,24 @@ if PYSIDE6_AVAILABLE:
                 if mode == ResourceMode.CUSTOM:
                     return
                 limits = self.controller.apply_resource_mode(mode)
-                for widget in (self.cpu_cap_spin, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+
+                for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
                     widget.blockSignals(True)
                 try:
-                    self.cpu_cap_spin.setValue(limits.cpu_hard_cap_percent)
+
+                    self._set_cpu_cap_selection(limits.cpu_hard_cap_percent)
                     self.threads_spin.setValue(limits.cpu_threads)
                     self.concurrent_spin.setValue(limits.max_concurrent_jobs)
                     self.chk_gpu_enable.setChecked(limits.enable_gpu_encoding)
                 finally:
-                    for widget in (self.cpu_cap_spin, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+
+                    for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
                         widget.blockSignals(False)
 
         def _on_resource_controls_edited(self, *_args: object) -> None:
             self.controller.update_resource_controls(
-                cpu_hard_cap_percent=self.cpu_cap_spin.value(),
+
+                cpu_hard_cap_percent=int(self.cpu_cap_combo.currentData()),
                 cpu_threads=self.threads_spin.value(),
                 max_concurrent_jobs=self.concurrent_spin.value(),
                 enable_gpu_encoding=self.chk_gpu_enable.isChecked(),
