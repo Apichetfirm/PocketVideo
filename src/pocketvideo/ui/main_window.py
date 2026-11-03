@@ -407,6 +407,40 @@ if PYSIDE6_AVAILABLE:
                 cards_row.addWidget(card, 1)
             v.addLayout(cards_row)
 
+            # Interactive comparison table: a compact alternative to the existing cards.
+            self.preset_comparison_title = QtWidgets.QLabel()
+            self.preset_comparison_title.setObjectName("HeadingLabel")
+            v.addWidget(self.preset_comparison_title)
+            self.preset_table = QtWidgets.QTableWidget(len(PresetId), 4)
+            self.preset_table.verticalHeader().setVisible(False)
+            self.preset_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.preset_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+            self.preset_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.SingleSelection)
+            self.preset_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Stretch)
+            self.preset_table.setMinimumHeight(180)
+            self.preset_table.setMaximumHeight(225)
+            self.preset_table.cellClicked.connect(
+                lambda row, _col: self._on_preset_selected(list(PresetId)[row])
+            )
+            v.addWidget(self.preset_table)
+            prefs_row = QtWidgets.QHBoxLayout()
+            self.pref_quality = QtWidgets.QCheckBox()
+            self.pref_size = QtWidgets.QCheckBox()
+            self.pref_speed = QtWidgets.QCheckBox()
+            for p in (self.pref_quality, self.pref_size, self.pref_speed):
+                prefs_row.addWidget(p)
+                p.toggled.connect(self._on_preferences_changed)
+            prefs_row.addStretch(1)
+            v.addLayout(prefs_row)
+            self.preference_message = QtWidgets.QLabel()
+            self.preference_message.setObjectName("MutedLabel")
+            self.preference_message.setWordWrap(True)
+            v.addWidget(self.preference_message)
+            self.encoding_details_label = QtWidgets.QLabel()
+            self.encoding_details_label.setObjectName("SubheadingLabel")
+            self.encoding_details_label.setWordWrap(True)
+            v.addWidget(self.encoding_details_label)
+
             # Custom Target Size Bar (Preset E)
             self.target_size_frame = QtWidgets.QFrame()
             self.target_size_frame.setObjectName("CardFrame")
@@ -448,23 +482,40 @@ if PYSIDE6_AVAILABLE:
                 self.format_combo.addItem(fmt.upper(), fmt)
             self.format_combo.currentIndexChanged.connect(self._on_format_changed)
 
+
+            self.operation_label = QtWidgets.QLabel()
+            self.operation_combo = QtWidgets.QComboBox()
+            self.operation_combo.addItem("", "compress")
+            self.operation_combo.addItem("", "convert")
+            self.operation_combo.addItem("", "both")
+            self.operation_combo.currentIndexChanged.connect(self._on_operation_changed)
+
             self.lbl_out_dir = QtWidgets.QLabel()
             self.out_dir_edit = QtWidgets.QLineEdit(str(self.controller.output_dir))
             self.btn_browse_out = QtWidgets.QPushButton()
+
             self.btn_browse_out.clicked.connect(self._browse_output_dir)
+            self.btn_save_out_default = QtWidgets.QPushButton()
+            self.btn_save_out_default.clicked.connect(self._save_default_folder)
+            self.out_dir_edit.editingFinished.connect(self._sync_current_output_directory)
 
             self.btn_start_compress = QtWidgets.QPushButton()
             self.btn_start_compress.setObjectName("PrimaryStartButton")
             self.btn_start_compress.clicked.connect(self._start_compression_batch)
 
-            b_layout.addWidget(self.lbl_compat, 0, 0)
-            b_layout.addWidget(self.compat_combo, 0, 1)
-            b_layout.addWidget(self.lbl_format, 0, 2)
-            b_layout.addWidget(self.format_combo, 0, 3)
-            b_layout.addWidget(self.lbl_out_dir, 1, 0)
-            b_layout.addWidget(self.out_dir_edit, 1, 1, 1, 2)
-            b_layout.addWidget(self.btn_browse_out, 1, 3)
-            b_layout.addWidget(self.btn_start_compress, 2, 0, 1, 4)
+
+            b_layout.addWidget(self.operation_label, 0, 0)
+            b_layout.addWidget(self.operation_combo, 0, 1, 1, 3)
+            b_layout.addWidget(self.lbl_compat, 1, 0)
+
+            b_layout.addWidget(self.compat_combo, 1, 1)
+            b_layout.addWidget(self.lbl_format, 1, 2)
+            b_layout.addWidget(self.format_combo, 1, 3)
+            b_layout.addWidget(self.lbl_out_dir, 2, 0)
+            b_layout.addWidget(self.out_dir_edit, 2, 1, 1, 2)
+            b_layout.addWidget(self.btn_browse_out, 2, 3)
+            b_layout.addWidget(self.btn_save_out_default, 3, 1, 1, 3)
+            b_layout.addWidget(self.btn_start_compress, 4, 0, 1, 4)
             v.addWidget(bottom_card)
 
             # Expandable Advanced Settings Panel
@@ -726,7 +777,29 @@ if PYSIDE6_AVAILABLE:
             self._refresh_imported_file_table()
 
             self.preset_section_label.setText(t("preset_section_title"))
+
             self.preset_disclaimer_label.setText(t("preset_disclaimer"))
+            self.preset_comparison_title.setText(t("preset_comparison_title"))
+            self.preset_table.setHorizontalHeaderLabels([
+                t("preset_col_name"), t("preset_col_size"),
+                t("preset_col_speed"), t("preset_col_quality"),
+            ])
+            matrix = [
+                ("preset_a_title", ("น้อย–ปานกลาง", "ช้า", "ดีมาก"), ("Low–medium", "Slow", "Excellent")),
+                ("preset_b_title", ("ปานกลาง–มาก", "ช้า", "ดี"), ("Medium–high", "Slow", "Good")),
+                ("preset_c_title", ("มาก", "ช้ามาก", "ลดลงบ้าง"), ("High", "Very slow", "Some quality loss")),
+                ("preset_d_title", ("ปานกลาง", "เร็ว", "ปานกลาง–ดี"), ("Medium", "Fast", "Fair–good")),
+                ("preset_e_title", ("ตามที่กำหนด", "ช้า (2-Pass)", "ขึ้นกับขนาดเป้าหมาย"), ("Target-based", "Slow (2-pass)", "Depends on target")),
+            ]
+            for row, (key, thai, english) in enumerate(matrix):
+                values = (t(key), *(thai if self.controller.translator.language == "th" else english))
+                for col, value in enumerate(values):
+                    self.preset_table.setItem(row, col, QtWidgets.QTableWidgetItem(value))
+            self.pref_quality.setText(t("pref_quality"))
+            self.pref_size.setText(t("pref_size"))
+            self.pref_speed.setText(t("pref_speed"))
+            self.preference_message.setText(t("pref_info"))
+            self._refresh_encoding_details()
 
             for pid, card in self.preset_cards.items():
                 desc = PRESET_CATALOG[pid]
@@ -740,9 +813,17 @@ if PYSIDE6_AVAILABLE:
             self.compat_combo.setItemText(0, t("compat_modern_android"))
             self.compat_combo.setItemText(1, t("compat_max_compatibility"))
             self.lbl_format.setText(t("label_output_format"))
+
             self.lbl_out_dir.setText(t("label_output_folder"))
+            self.btn_save_out_default.setText(t("btn_default_folder"))
+            self.operation_label.setText(t("operation_label"))
+            self.operation_combo.setItemText(0, t("operation_compress"))
+            self.operation_combo.setItemText(1, t("operation_convert"))
+            self.operation_combo.setItemText(2, t("operation_both"))
             self.btn_browse_out.setText(t("btn_browse_output"))
+
             self.btn_start_compress.setText(t("btn_start_compress"))
+            self._on_operation_changed()
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
 
             self.convert_title.setText(t("nav_convert"))
@@ -781,30 +862,93 @@ if PYSIDE6_AVAILABLE:
             self.apply_theme(next_theme)
             self.retranslate_ui()
 
-        def _on_preset_selected(self, preset_id: PresetId) -> None:
+
+        def _on_preset_selected(self, preset_id: PresetId, *, from_preferences: bool = False) -> None:
             self.controller.active_preset = preset_id
+            if not from_preferences:
+                for preference in (self.pref_quality, self.pref_size, self.pref_speed):
+                    with QtCore.QSignalBlocker(preference):
+                        preference.setChecked(False)
+                self.preference_message.setText(self.controller.translator.t("pref_info"))
+            with QtCore.QSignalBlocker(self.preset_table):
+                self.preset_table.selectRow(list(PresetId).index(preset_id))
+            self._refresh_encoding_details()
             for pid, card in self.preset_cards.items():
                 card.set_selected(pid == preset_id)
             self.target_size_frame.setVisible(preset_id == PresetId.CUSTOM_SIZE)
             self._refresh_selection_summary()
 
+
+        def _on_preferences_changed(self, *_args: object) -> None:
+            quality = self.pref_quality.isChecked()
+            small = self.pref_size.isChecked()
+            speed = self.pref_speed.isChecked()
+            if not (quality or small or speed):
+                self.preference_message.setText(self.controller.translator.t("pref_info"))
+                return
+            if small and quality:
+                recommended = PresetId.BEST_BALANCE
+            elif speed:
+                recommended = PresetId.FASTEST
+            elif small:
+                recommended = PresetId.MAX_SPACE_SAVING
+            else:
+                recommended = PresetId.BEST_QUALITY
+            self._on_preset_selected(recommended, from_preferences=True)
+            self.preference_message.setText(
+                self.controller.translator.t("pref_conflict")
+                if sum((quality, small, speed)) > 1
+                else self.controller.translator.t("preset_comparison_hint")
+            )
+
+        def _refresh_encoding_details(self) -> None:
+            if not hasattr(self, "encoding_details_label"):
+                return
+            p = PRESET_CATALOG[self.controller.active_preset]
+            if p.uses_two_pass:
+                detail = f"2-Pass • Target {self.controller.target_size_mb:g} MB • size not exact"
+            else:
+                crf = (p.default_crf_h265 if self.controller.compatibility_mode ==
+                       CompatibilityMode.MODERN_ANDROID else p.default_crf_h264)
+                detail = f"1-Pass • CRF {crf} • Encoder preset: {p.encoder_preset}"
+            codec = ("HEVC/H.265" if self.controller.compatibility_mode ==
+                     CompatibilityMode.MODERN_ANDROID else "H.264")
+            if p.prefers_gpu:
+                detail += " • GPU (if supported)"
+            if self.chk_adv_override.isChecked() if hasattr(self, "chk_adv_override") else False:
+                detail += " • Manual overrides enabled (see Advanced)"
+            self.encoding_details_label.setText(f"{codec} • {detail} • {self.controller.target_container.upper()}")
+
+        def _on_operation_changed(self, *_args: object) -> None:
+            mode = self.operation_combo.currentData()
+            t = self.controller.translator.t
+            self.btn_start_compress.setText(
+                t("btn_start_convert") if mode == "convert" else t("btn_start_compress")
+            )
+
         def _on_target_size_changed(self) -> None:
             val = float(self.target_size_spin.value())
             if self.target_unit_combo.currentText() == "GB":
                 val *= 1024.0
+
             self.controller.target_size_mb = val
+            self._refresh_encoding_details()
             self._refresh_selection_summary()
 
         def _on_compat_changed(self) -> None:
             data = self.compat_combo.currentData()
             if data:
+
                 self.controller.compatibility_mode = CompatibilityMode(str(data))
+                self._refresh_encoding_details()
                 self._refresh_selection_summary()
 
         def _on_format_changed(self) -> None:
             data = self.format_combo.currentData()
             if data:
+
                 self.controller.target_container = str(data)
+                self._refresh_encoding_details()
                 self._refresh_selection_summary()
 
         def _browse_output_dir(self) -> None:
@@ -812,8 +956,29 @@ if PYSIDE6_AVAILABLE:
                 self, "Select Output Folder", str(self.controller.output_dir)
             )
             if chosen:
-                self.controller.output_dir = Path(chosen)
+
+                self.controller.set_output_directory(chosen)
                 self.out_dir_edit.setText(chosen)
+
+        def _sync_current_output_directory(self) -> None:
+            path = self.out_dir_edit.text().strip()
+            if not path:
+                return
+            try:
+                self.controller.set_output_directory(path)
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+
+        def _save_default_folder(self) -> None:
+            try:
+                folder = self.controller.set_output_directory(
+                    self.out_dir_edit.text().strip(), remember=True
+                )
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            self.out_dir_edit.setText(str(folder))
+            self.btn_save_out_default.setText(self.controller.translator.t("default_folder_saved"))
 
         def _toggle_advanced_panel(self, checked: bool) -> None:
             self.advanced_panel.setVisible(checked)
@@ -997,8 +1162,14 @@ if PYSIDE6_AVAILABLE:
         def _start_compression_batch(self) -> None:
             if not self.controller.selected_files:
                 return
-            self.controller.output_dir = Path(self.out_dir_edit.text().strip() or str(self.controller.output_dir))
-            self.controller.enqueue_current_batch(operation_mode=OperationMode.COMPRESS)
+
+            self._sync_current_output_directory()
+            selected_op = self.operation_combo.currentData()
+            self.controller.enqueue_current_batch(
+                operation_mode=(OperationMode.CONVERT_TRANSCODE if selected_op == "convert"
+                                else OperationMode.COMPRESS),
+                allow_smart_remux=(selected_op == "convert"),
+            )
             self._switch_page(2)
 
         def _start_conversion_batch(self) -> None:
