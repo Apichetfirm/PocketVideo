@@ -1395,13 +1395,19 @@ if PYSIDE6_AVAILABLE:
             else:
                 self.target_plan_status.setText("")
 
-            if video:
-                mode, reason = self.controller.check_conversion_mode(
-                    video, self.controller.target_container
-                )
-                self.convert_mode_banner.setText(f"{mode.value}: {reason}")
-            else:
-                self.convert_mode_banner.setText(self.controller.translator.t("image_support_note"))
+            # During dashboard construction the separate Convert page has not
+            # been created yet, so this label may not exist when preloaded
+            # photos are present in the controller.
+            if hasattr(self, "convert_mode_banner"):
+                if video:
+                    mode, reason = self.controller.check_conversion_mode(
+                        video, self.controller.target_container
+                    )
+                    self.convert_mode_banner.setText(f"{mode.value}: {reason}")
+                else:
+                    self.convert_mode_banner.setText(
+                        self.controller.translator.t("image_support_note")
+                    )
 
             warnings = self.controller.evaluate_active_warnings()
             if warnings:
