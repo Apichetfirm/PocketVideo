@@ -229,6 +229,71 @@ if PYSIDE6_AVAILABLE:
             except Exception as exc:
                 self.summary_label.setText(f"Preview error: {exc}")
 
+    class CompletedVideoCompareDialog(QtWidgets.QDialog):
+        """Compare aligned frames from the completed *real* source and output."""
+
+        frames_ready = Signal(str, str)
+        frames_error = Signal(str)
+
+        def __init__(self, result: JobResultComparison, binaries, parent=None) -> None:
+            super().__init__(parent)
+            self.result = result
+            self.binaries = binaries
+            self._tmp = tempfile.TemporaryDirectory(prefix="pocketvideo_completed_compare_")
+            self.setWindowTitle("PocketVideo — Before / After")
+            self.resize(960, 580)
+            self.frames_ready.connect(self._display_frames)
+            self.frames_error.connect(self._display_error)
+
+            layout = QtWidgets.QVBoxLayout(self)
+            self.summary = QtWidgets.QLabel(
+                f"{result.input_path.name} • {format_bytes(result.original_size_bytes)} → "
+                f"{format_bytes(result.output_size_bytes)} • Saved {result.reduction_percent:.1f}%"
+            )
+            self.summary.setWordWrap(True)
+            layout.addWidget(self.summary)
+            self.status = QtWidgets.QLabel("Loading actual source/output frames…")
+            layout.addWidget(self.status)
+            frames = QtWidgets.QHBoxLayout()
+            self.source_frame = QtWidgets.QLabel("Before")
+            self.output_frame = QtWidgets.QLabel("After")
+            for frame in (self.source_frame, self.output_frame):
+                frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                frame.setMinimumSize(380, 280)
+                frame.setScaledContents(False)
+                frames.addWidget(frame, 1)
+            layout.addLayout(frames, 1)
+            QtCore.QTimer.singleShot(0, self._extract_frames_async)
+
+        def _extract_frames_async(self) -> None:
+            def worker() -> None:
+                try:
+                    original = Path(self._tmp.name) / "original.png"
+                    converted = Path(self._tmp.name) / "result.png"
+                    extract_representative_frame(self.result.input_path, original, self.binaries)
+                    extract_representative_frame(self.result.output_path, converted, self.binaries)
+                    self.frames_ready.emit(str(original), str(converted))
+                except Exception as exc:
+                    self.frames_error.emit(str(exc))
+
+            threading.Thread(target=worker, name="PocketVideoCompare", daemon=True).start()
+
+        def _display_frames(self, original: str, converted: str) -> None:
+            for path, label in ((original, self.source_frame), (converted, self.output_frame)):
+                pixmap = QtGui.QPixmap(path)
+                if pixmap.isNull():
+                    self.status.setText("Cannot load the extracted frame.")
+                    return
+                label.setPixmap(pixmap.scaled(
+                    440, 360, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+            self.status.setText("Actual decoded video frames — same timestamp (0.5s)")
+
+        def _display_error(self, message: str) -> None:
+            self.status.setText(message)
+
+
     class PocketVideoMainWindow(QtWidgets.QMainWindow):
         """Main desktop window for PocketVideo."""
 

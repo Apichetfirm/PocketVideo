@@ -201,6 +201,8 @@ class AppController:
 
     def set_output_directory(self, folder: str | Path, *, remember: bool = False) -> Path:
         """Set the current output folder, optionally persisting it for future launches."""
+        if not str(folder).strip():
+            raise ValueError("Select an output folder before saving it.")
         candidate = Path(folder).expanduser().resolve()
         if candidate.exists() and not candidate.is_dir():
             raise ValueError("The output destination must be a folder, not a file.")
