@@ -10,9 +10,11 @@ import os
 from pathlib import Path
 import tempfile
 import sys
+import threading
 from typing import Optional
 
 from pocketvideo.core.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from pocketvideo.core.savings import SavingsStats
 from pocketvideo.core.models import (
     CompatibilityMode,
     JobResultComparison,
@@ -168,6 +170,8 @@ class SettingsManager:
         self.base_dir = get_app_data_dir(app_data_dir)
         self.settings_path = self.base_dir / "settings.json"
         self.history_path = self.base_dir / "history.json"
+        self.savings_stats_path = self.base_dir / "savings_stats.json"
+        self._history_lock = threading.RLock()
         self.settings = self.load_settings()
 
     def load_settings(self) -> AppSettings:
@@ -192,24 +196,73 @@ class SettingsManager:
         self._atomic_write_json(self.settings_path, asdict(self.settings))
 
     def load_history(self) -> list[JobResultComparison]:
-        if not self.history_path.exists():
-            return []
-        try:
-            raw = json.loads(self.history_path.read_text(encoding="utf-8"))
+        """Read metadata snapshots; missing originals/outputs are NOT an error.
+
+        A malformed legacy record must never hide all the other history rows.
+        """
+        with self._history_lock:
+            if not self.history_path.exists():
+                return []
+            try:
+                raw = json.loads(self.history_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeError):
+                return []
             if not isinstance(raw, list):
                 return []
-            return [JobResultComparison.from_dict(item) for item in raw if isinstance(item, dict)]
-        except (OSError, json.JSONDecodeError, ValueError):
-            return []
+            entries: list[JobResultComparison] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    entries.append(JobResultComparison.from_dict(item))
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    logging.getLogger("pocketvideo").warning(
+                        "Skipped a malformed history entry, preserving other records"
+                    )
+            return entries
 
-    def append_history(self, result: JobResultComparison, max_entries: int = 200) -> None:
-        history = self.load_history()
-        history.insert(0, result)
-        history = history[:max_entries]
-        self._atomic_write_json(self.history_path, [item.to_dict() for item in history])
+    def load_savings_stats(self) -> SavingsStats:
+        """Read lifetime stats; backfill old history once without double count.
+
+        History is a list of completed result snapshots. A separate cumulative
+        ledger survives history cleanup/truncation. Both remain useful after
+        original footage is deleted or USB disks are unplugged.
+        """
+        with self._history_lock:
+            try:
+                raw = json.loads(self.savings_stats_path.read_text(encoding="utf-8"))
+                stats = SavingsStats.from_dict(raw)
+                needs_save = False
+            except (OSError, ValueError, TypeError, UnicodeError):
+                stats = SavingsStats()
+                needs_save = True
+            for result in self.load_history():
+                if stats.add(result):
+                    needs_save = True
+            if needs_save:
+                self._atomic_write_json(self.savings_stats_path, stats.to_dict())
+            return stats
+
+    def append_history(self, result: JobResultComparison, max_entries: int = 2000) -> None:
+        """Atomically store verified measurements, then reconcile lifetime totals."""
+        with self._history_lock:
+            history = self.load_history()
+            # Retries/callback races must not inflate totals or list duplicates.
+            history = [entry for entry in history if entry.job_id != result.job_id]
+            history.insert(0, result)
+            history = history[:max_entries]
+            self._atomic_write_json(
+                self.history_path, [item.to_dict() for item in history]
+            )
+            self.load_savings_stats()
 
     def clear_history(self) -> None:
-        self._atomic_write_json(self.history_path, [])
+        """Clear visible history only. Lifetime savings remain as a durable stat."""
+        with self._history_lock:
+            # Reconcile first, otherwise a first-time migration would lose
+            # successful jobs that were only present in older history.json.
+            self.load_savings_stats()
+            self._atomic_write_json(self.history_path, [])
 
     @staticmethod
     def _atomic_write_json(target_path: Path, payload: object) -> None:
@@ -220,6 +273,8 @@ class SettingsManager:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.flush()
+                os.fsync(handle.fileno())
             os.replace(tmp_name, target_path)
         except Exception:
             if os.path.exists(tmp_name):
