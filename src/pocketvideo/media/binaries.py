@@ -175,7 +175,9 @@ def detect_working_gpu_encoder(
         else ["nvenc", "qsv", "amf", "videotoolbox"]
     )
     if preferred_vendor in vendor_order:
-        vendor_order = [preferred_vendor] + [v for v in vendor_order if v != preferred_vendor]
+        # Explicit selection must not silently change to a *different* GPU.
+        # The caller will safely fall back to software if this hardware fails.
+        vendor_order = [preferred_vendor]
 
     creation_flags = _get_CreationFlags()
     for vendor in vendor_order:
