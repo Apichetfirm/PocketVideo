@@ -1,4 +1,19 @@
-# PocketVideo — Open-Source Windows Video Compressor & Converter
+<!-- firm-impulse-showcase:v1 -->
+<div align="center">
+
+# 🎞️ PocketVideo
+
+**Compress smarter. Keep your files local. A free offline media utility for Windows.**
+
+<img alt="Status: Active development" src="https://img.shields.io/badge/Status-Active%20development-0F766E?style=flat-square" /> <img alt="Built with: Python" src="https://img.shields.io/badge/Built%20with-Python-1F2937?style=flat-square" /> <img alt="Built with: PySide6" src="https://img.shields.io/badge/Built%20with-PySide6-1F2937?style=flat-square" /> <img alt="Built with: FFmpeg" src="https://img.shields.io/badge/Built%20with-FFmpeg-1F2937?style=flat-square" />
+
+[Features](#key-features) · [Releases](https://github.com/Apichetfirm/PocketVideo/releases) · [Source](https://github.com/Apichetfirm/PocketVideo)
+
+<sub>Part of the Firm Impulse engineering portfolio.</sub>
+
+</div>
+
+---
 
 **PocketVideo** is a free, open-source, 100% offline Windows 10/11 (x64) desktop application for converting and compressing mixed Android phone **videos and still photos**, including HEIC/HEIF when the bundled codec backend is present.
 
