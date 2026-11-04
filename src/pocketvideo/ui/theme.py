@@ -192,6 +192,47 @@ def build_stylesheet(theme_name: str = "dark") -> str:
     QPushButton:hover {{
         border-color: {p.border_accent};
     }}
+    QPushButton:disabled, QToolButton:disabled {{
+        color: {p.text_muted};
+        background-color: {p.bg_secondary};
+    }}
+    QPushButton:focus, QToolButton:focus {{
+        border: 1px solid {p.border_accent};
+    }}
+    QToolButton {{
+        background-color: {p.bg_secondary};
+        color: {p.text_primary};
+        border: 1px solid {p.border_subtle};
+        border-radius: 7px;
+        padding: 5px 7px;
+    }}
+    QToolButton:hover {{
+        border-color: {p.border_accent};
+        background-color: {p.bg_card_selected};
+    }}
+    QToolButton::menu-indicator {{
+        image: none;
+        width: 0px;
+    }}
+    QMenu {{
+        background-color: {p.bg_card};
+        color: {p.text_primary};
+        border: 1px solid {p.border_subtle};
+        border-radius: 8px;
+        padding: 6px;
+    }}
+    QMenu::item {{
+        padding: 7px 18px 7px 10px;
+        border-radius: 5px;
+    }}
+    QMenu::item:selected {{
+        background-color: {p.bg_card_selected};
+        color: {p.text_primary};
+    }}
+    QSplitter::handle {{
+        background-color: {p.border_subtle};
+        width: 2px;
+    }}
     QPushButton#PrimaryStartButton {{
         background-color: {p.accent_primary};
         color: #FFFFFF;

@@ -32,3 +32,17 @@ rights signoff for redistribution of FFmpeg/HEVC/libheif binary dependencies.
   accuracy, prolonged VideoToolbox stress, USB unplug and power loss behavior
   remain outside CI coverage. User files: keep both and back up originals.
 - App bundle uses ad-hoc signature for testing, not Apple notarization.
+
+
+## macOS v1.3.1 build quality gates
+- New CI runs separately on `macos-15` Apple Silicon and `macos-15-intel`
+  and exercises packaged video compression without Homebrew on PATH.
+- The branded `.app` is **ad-hoc signed only** until a configured Developer
+  ID signing/notarization workflow succeeds.
+- See `docs/MACOS_DISTRIBUTION.md` for setup, test matrix and release gates.
+
+
+## Build prerequisite (macOS)
+Install `dylibbundler` as well as FFmpeg:
+`brew install ffmpeg dylibbundler`. The packager isolates FFmpeg's own
+dylibs from Qt Multimedia's separate, ABI-incompatible FFmpeg libraries.

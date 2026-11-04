@@ -64,6 +64,7 @@ from pocketvideo.queue.manager import (
 from pocketvideo.ui.controller import AppController
 from pocketvideo.ui.theme import build_stylesheet
 from pocketvideo.ui.file_actions import reveal_file_in_location
+from pocketvideo.ui.icons import app_icon, decorate_main_window, assign, icon
 
 
 if PYSIDE6_AVAILABLE:
@@ -378,6 +379,7 @@ if PYSIDE6_AVAILABLE:
             self.nav_buttons: list[QtWidgets.QPushButton] = []
 
             self._build_ui()
+            decorate_main_window(self)
             self.apply_theme(self.controller.settings.theme)
             self.retranslate_ui()
             self._refresh_selection_summary()
@@ -407,8 +409,21 @@ if PYSIDE6_AVAILABLE:
             self.brand_label.setObjectName("HeadingLabel")
             self.brand_sub = QtWidgets.QLabel("Android Video Studio")
             self.brand_sub.setObjectName("MutedLabel")
-            side_v.addWidget(self.brand_label)
-            side_v.addWidget(self.brand_sub)
+            self.brand_icon_label = QtWidgets.QLabel()
+            self.brand_icon_label.setObjectName("BrandIcon")
+            self.brand_icon_label.setPixmap(app_icon(56).pixmap(44, 44))
+            self.brand_icon_label.setFixedSize(44, 44)
+            self.brand_icon_label.setAccessibleName("PocketVideo application icon")
+            brand_row = QtWidgets.QHBoxLayout()
+            brand_row.setSpacing(10)
+            brand_row.addWidget(self.brand_icon_label)
+            brand_copy = QtWidgets.QVBoxLayout()
+            brand_copy.setContentsMargins(0, 0, 0, 0)
+            brand_copy.setSpacing(1)
+            brand_copy.addWidget(self.brand_label)
+            brand_copy.addWidget(self.brand_sub)
+            brand_row.addLayout(brand_copy, 1)
+            side_v.addLayout(brand_row)
             # Visible creator credit; keep the original open-source attribution
             # in repository/licensing metadata separately.
             self.creator_credit_label = QtWidgets.QLabel("Created by Firm Impulse")
@@ -1882,14 +1897,15 @@ if PYSIDE6_AVAILABLE:
             ):
                 button = QtWidgets.QToolButton()
                 button.setText(text_label)
-                button.setToolTip(str(target))
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+                assign(button, "folder", tooltip=str(target), size=14)
                 button.clicked.connect(
                     lambda _checked=False, p=target: self._open_job_location(p)
                 )
                 buttons.addWidget(button)
             more = QtWidgets.QToolButton()
             more.setText("⋯")
-            more.setToolTip("Open / Compare / Retry")
+            assign(more, "more", tooltip="Open / Compare / Retry", size=14)
             more.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
             menu = QtWidgets.QMenu(more)
             original = (
@@ -1900,6 +1916,7 @@ if PYSIDE6_AVAILABLE:
             before_action = menu.addAction(
                 "เปิด Before" if th else "Open Before"
             )
+            before_action.setIcon(icon("file", more))
             before_action.setEnabled(original.is_file())
             before_action.triggered.connect(
                 lambda _checked=False, p=original: self._open_file_path(p)
@@ -1907,11 +1924,13 @@ if PYSIDE6_AVAILABLE:
             after_action = menu.addAction(
                 "เปิด After" if th else "Open After"
             )
+            after_action.setIcon(icon("file", more))
             after_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
             after_action.triggered.connect(
                 lambda _checked=False, p=output_path: self._open_file_path(p)
             )
             compare_action = menu.addAction("เทียบภาพ" if th else "Compare")
+            compare_action.setIcon(icon("compare", more))
             compare_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
             if item.result:
                 compare_action.triggered.connect(
@@ -1920,6 +1939,7 @@ if PYSIDE6_AVAILABLE:
             if item.status in (JobStatus.CANCELLED, JobStatus.FAILED):
                 menu.addSeparator()
                 retry = menu.addAction("ลองใหม่" if th else "Retry")
+                retry.setIcon(icon("retry", more))
                 retry.triggered.connect(
                     lambda _checked=False, jid=item.spec.job_id: self._retry_job(jid)
                 )

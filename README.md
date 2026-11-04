@@ -147,3 +147,10 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 ### macOS alpha
 - A **macOS CI packaging workflow** begins a native .app alpha for testing using Python 3.12, PySide6, Pillow/HEIC and FFmpeg. The macOS app uses ~/Library/Application Support/PocketVideo and ~/Movies/PocketVideo_Output, Finder 'Reveal', and can probe VideoToolbox.
 - The macOS alpha is **not signed with an Apple Developer ID, notarized, or validated on real Apple Silicon and Intel Macs**. macOS sleep/shutdown are deliberately disabled; Windows-only CPU hard caps do not work on macOS. Do not treat a green macOS CI as public macOS release approval. See docs/MACOS_ALPHA.md.
+
+
+## v1.3.1 — Native icon polish and macOS readiness (development)
+- Original PocketVideo app/installer icons are generated from source in `packaging/generate_icons.py`; navigation, file import, processing and queue actions now use small, native Qt icons with accessible text.
+- Both Windows and macOS CI build branded desktop executables. macOS CI runs **Apple Silicon (arm64)** and **Intel (x86_64)** separately, checks the app signature and runs packaged CLI compression with external FFmpeg removed from `PATH` to reduce false-positive smoke tests.
+- The macOS release workflow can perform Developer ID signing, hardened runtime, Apple `notarytool` notarization, stapling, and unsigned/signed artifact separation **only when the owner's Developer ID credentials and repository approval gates are configured**. This is not a claim of notarization or public release.
+- Binary redistribution and physical end-user Mac tests remain explicit go/no-go gates. See `docs/MACOS_DISTRIBUTION.md`.

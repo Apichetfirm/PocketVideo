@@ -1,6 +1,6 @@
 ; Inno Setup 6 Script for PocketVideo Windows 10/11 x64 Installer
 #define MyAppName "PocketVideo"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "1.3.1"
 #define MyAppPublisher "Firm Impulse"
 #define MyAppURL "https://github.com/Apichetfirm/PocketVideo"
 #define MyAppExeName "PocketVideo.exe"
@@ -18,6 +18,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\THIRD_PARTY_NOTICES.md
+SetupIconFile=..\assets\pocketvideo.ico
 OutputDir=..\dist\installer
 OutputBaseFilename=PocketVideo-Setup-{#MyAppVersion}-win64
 Compression=lzma2/ultra64

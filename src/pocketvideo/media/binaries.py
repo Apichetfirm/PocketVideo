@@ -111,8 +111,10 @@ def validate_binaries(ffmpeg_path: Path, ffprobe_path: Path) -> BinaryPaths:
             raise MediaBinaryError(f"Failed to execute {label} binary ({path}): {exc}") from exc
 
         if proc.returncode != 0 or "version" not in proc.stdout.lower():
+            detail = (proc.stderr or proc.stdout or "").strip()[-1000:]
             raise MediaBinaryError(
-                f"{label} binary ({path}) returned invalid output (exit {proc.returncode})."
+                f"{label} binary ({path}) returned invalid output "
+                f"(exit {proc.returncode}). {detail}"
             )
 
         if label == "FFmpeg":

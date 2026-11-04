@@ -1,0 +1,67 @@
+name: macOS Developer ID Distribution — Manual Approval Required
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-macos-distribution:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      vars.POCKETVIDEO_RELEASE_APPROVED == 'true' &&
+      vars.MACOS_DISTRIBUTION_APPROVED == 'true'
+    name: Sign and notarize macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, arch: arm64}
+          - {runner: macos-15-intel, arch: x86_64}
+    env:
+      POCKETVIDEO_RELEASE_APPROVED: ${{ vars.POCKETVIDEO_RELEASE_APPROVED }}
+      MACOS_DISTRIBUTION_APPROVED: ${{ vars.MACOS_DISTRIBUTION_APPROVED }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and smoke test (same revision as distribution)
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -euo pipefail
+          brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          brew list dylibbundler >/dev/null 2>&1 || brew install dylibbundler
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -e .
+          python -m pytest -q
+          bash packaging/build_macos.sh
+          dist/PocketVideo.app/Contents/MacOS/PocketVideo --verify-video-player
+      - name: Developer ID sign, Apple notarize and staple
+        shell: bash
+        # Signing secrets must NEVER be exposed to pip installs, test code or
+        # checkout actions. Scope them only to this deliberate signing step.
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          MACOS_APPLE_ID: ${{ secrets.MACOS_APPLE_ID }}
+          MACOS_APP_SPECIFIC_PASSWORD: ${{ secrets.MACOS_APP_SPECIFIC_PASSWORD }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: bash packaging/notarize_macos.sh
+      - name: Upload Apple-approved artifacts (no automatic public release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketVideo-macOS-${{ matrix.arch }}-Notarized
+          path: |
+            dist/macos-signed/*.zip
+            dist/macos-signed/*.dmg
+            dist/macos-signed/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
