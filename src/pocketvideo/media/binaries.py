@@ -167,11 +167,17 @@ def detect_working_gpu_encoder(
     target_codec: str = "hevc",
     preferred_vendor: str = "auto",
 ) -> Optional[str]:
-    """Probe whether a hardware GPU encoder (NVENC, QSV, AMF) actually initializes."""
+    """Probe NVIDIA, Intel, AMD or Apple VideoToolbox with an actual 1-frame encode."""
     codec_prefix = "hevc" if target_codec in ("hevc", "h265") else "h264"
-    vendor_order = ["nvenc", "qsv", "amf"]
+    vendor_order = (
+        ["videotoolbox", "nvenc", "qsv", "amf"]
+        if sys.platform == "darwin"
+        else ["nvenc", "qsv", "amf", "videotoolbox"]
+    )
     if preferred_vendor in vendor_order:
-        vendor_order = [preferred_vendor] + [v for v in vendor_order if v != preferred_vendor]
+        # Explicit selection must not silently change to a *different* GPU.
+        # The caller will safely fall back to software if this hardware fails.
+        vendor_order = [preferred_vendor]
 
     creation_flags = _get_CreationFlags()
     for vendor in vendor_order:

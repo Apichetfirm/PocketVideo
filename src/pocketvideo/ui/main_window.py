@@ -20,6 +20,7 @@ Implements:
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import hashlib
 import tempfile
 import threading
@@ -380,6 +381,9 @@ if PYSIDE6_AVAILABLE:
             self.apply_theme(self.controller.settings.theme)
             self.retranslate_ui()
             self._refresh_selection_summary()
+            if self.controller.queue_manager:
+                for recovered in self.controller.queue_manager.items():
+                    self._on_job_updated_ui(recovered)
 
         def _build_ui(self) -> None:
             root = QtWidgets.QWidget()
@@ -393,7 +397,8 @@ if PYSIDE6_AVAILABLE:
             # Left navigation sidebar
             sidebar = QtWidgets.QFrame()
             sidebar.setObjectName("SidebarFrame")
-            sidebar.setFixedWidth(235)
+            sidebar.setMinimumWidth(140)
+            sidebar.setMaximumWidth(340)
             side_v = QtWidgets.QVBoxLayout(sidebar)
             side_v.setContentsMargins(16, 20, 16, 20)
             side_v.setSpacing(8)
@@ -456,8 +461,16 @@ if PYSIDE6_AVAILABLE:
             self.pages.addWidget(self._build_history_page())
             self.pages.addWidget(self._build_settings_page())
 
-            main_h.addWidget(sidebar)
-            main_h.addWidget(self.pages, 1)
+            # User-resizable navigation; keep useful space for dense queue data.
+            self.main_splitter = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+            self.main_splitter.setChildrenCollapsible(False)
+            self.main_splitter.addWidget(sidebar)
+            self.main_splitter.addWidget(self.pages)
+            self.main_splitter.setStretchFactor(0, 0)
+            self.main_splitter.setStretchFactor(1, 1)
+            self.main_splitter.setSizes([self.controller.settings.queue_sidebar_width, 980])
+            self.main_splitter.splitterMoved.connect(self._save_sidebar_width)
+            main_h.addWidget(self.main_splitter, 1)
             self._switch_page(0)
 
         def _build_dashboard_page(self) -> QtWidgets.QWidget:
@@ -701,6 +714,12 @@ if PYSIDE6_AVAILABLE:
                 max(0, self.after_action_combo.findData(
                     self.controller.settings.after_export_action))
             )
+            if sys.platform != "win32":
+                # No native macOS power-action integration yet; avoid exposing
+                # non-working choices or silently using Windows commands.
+                self.after_action_combo.setCurrentIndex(0)
+                for idx in (1, 2):
+                    self.after_action_combo.model().item(idx).setEnabled(False)
             self.after_action_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
 
             self.btn_start_compress = QtWidgets.QPushButton()
@@ -779,7 +798,10 @@ if PYSIDE6_AVAILABLE:
             self.chk_adv_override.toggled.connect(self._sync_advanced_options)
 
             self.adv_encoder_combo = QtWidgets.QComboBox()
-            for enc in ["", "libx265", "libx264", "libvpx-vp9", "libsvtav1", "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv"]:
+            for enc in ["", "libx265", "libx264", "libvpx-vp9", "libsvtav1",
+                        "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv",
+                        "hevc_amf", "h264_amf", "hevc_videotoolbox",
+                        "h264_videotoolbox"]:
                 self.adv_encoder_combo.addItem(enc or "Auto (Preset Default)", enc)
             self.adv_encoder_combo.currentIndexChanged.connect(self._sync_advanced_options)
 
@@ -847,6 +869,10 @@ if PYSIDE6_AVAILABLE:
             v.addStretch(1)
             return page
 
+        def _save_sidebar_width(self, *_args: object) -> None:
+            self.controller.settings.queue_sidebar_width = self.main_splitter.sizes()[0]
+            self.controller.settings_mgr.save_settings()
+
         def _build_queue_page(self) -> QtWidgets.QWidget:
             page = QtWidgets.QWidget()
             v = QtWidgets.QVBoxLayout(page)
@@ -861,7 +887,9 @@ if PYSIDE6_AVAILABLE:
             self.overall_progress_bar.setRange(0, 100)
             v.addWidget(self.overall_progress_bar)
 
-            ctrl_row = QtWidgets.QHBoxLayout()
+            ctrl_row = QtWidgets.QGridLayout()
+            ctrl_row.setHorizontalSpacing(8)
+            ctrl_row.setVerticalSpacing(8)
             self.btn_pause_job = QtWidgets.QPushButton()
             self.btn_resume_job = QtWidgets.QPushButton()
             self.btn_cancel_job = QtWidgets.QPushButton()
@@ -874,34 +902,98 @@ if PYSIDE6_AVAILABLE:
             self.btn_cancel_all.clicked.connect(self._cancel_all_jobs)
             self.btn_retry_failed.clicked.connect(self._retry_failed_jobs)
 
-            for b in (
+            for idx, b in enumerate((
                 self.btn_pause_job,
                 self.btn_resume_job,
                 self.btn_cancel_job,
                 self.btn_cancel_all,
                 self.btn_retry_failed,
-            ):
-                ctrl_row.addWidget(b)
-            ctrl_row.addStretch(1)
+            )):
+                ctrl_row.addWidget(b, idx // 3, idx % 3)
+            self.queue_columns_btn = QtWidgets.QToolButton()
+            self.queue_columns_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+            self.queue_columns_menu = QtWidgets.QMenu(self.queue_columns_btn)
+            self.queue_columns_btn.setMenu(self.queue_columns_menu)
+            ctrl_row.addWidget(self.queue_columns_btn, 1, 2)
             v.addLayout(ctrl_row)
 
-
-            self.queue_table = QtWidgets.QTableWidget(0, 9)
-            self.queue_table.setHorizontalHeaderLabels([
-
-                "Job ID", "File", "Destination", "Status", "Progress",
-                "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
-            ])
-            # Destination sits next to the file name, so it remains useful
-            # even when many queue columns require horizontal scrolling.
-            self.queue_table.setColumnWidth(2, 295)
+            self.queue_table = QtWidgets.QTableWidget(0, 11)
             self.queue_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-            self.queue_table.horizontalHeader().setStretchLastSection(False)
+            self.queue_table.setAlternatingRowColors(True)
+            header = self.queue_table.horizontalHeader()
+            header.setStretchLastSection(False)
+            header.setSectionsMovable(True)
+            header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Interactive)
+            self._queue_column_defaults = {
+                0: 105, 1: 210, 2: 240, 3: 112, 4: 108, 5: 142,
+                6: 155, 7: 260, 8: 205, 9: 162, 10: 162,
+            }
+            # Column visibility, sizes and order survive application restart.
+            self._queue_column_actions = {}
+            self._restoring_queue_layout = True
+            for idx in range(11):
+                action = self.queue_columns_menu.addAction("")
+                action.setCheckable(True)
+                action.setChecked(idx in self.controller.settings.queue_visible_columns)
+                if idx == 1:
+                    action.setChecked(True)
+                    action.setEnabled(False)  # file name is always present
+                action.toggled.connect(
+                    lambda checked, col=idx: self._set_queue_column_visibility(col, checked)
+                )
+                self._queue_column_actions[idx] = action
+                self.queue_table.setColumnWidth(
+                    idx, self.controller.settings.queue_column_widths.get(
+                        str(idx), self._queue_column_defaults[idx]
+                    )
+                )
+                self.queue_table.setColumnHidden(idx, not action.isChecked())
+            order = self.controller.settings.queue_column_order or [
+                1, 9, 10, 3, 4, 5, 7, 2, 8, 6, 0,
+            ]
+            for visual, logical in enumerate(order):
+                if 0 <= logical < 11:
+                    header.moveSection(header.visualIndex(logical), visual)
+            self._restoring_queue_layout = False
+            header.sectionResized.connect(self._save_queue_column_width)
+            header.sectionMoved.connect(self._save_queue_column_order)
             self.queue_table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
             )
             v.addWidget(self.queue_table, 1)
             return page
+
+        def _set_queue_column_visibility(self, column: int, visible: bool) -> None:
+            if column == 1:
+                return
+            self.queue_table.setColumnHidden(column, not visible)
+            self._save_queue_column_visibility()
+
+        def _save_queue_column_visibility(self) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            self.controller.settings.queue_visible_columns = [
+                col for col in range(11) if not self.queue_table.isColumnHidden(col)
+            ]
+            self.controller.settings_mgr.save_settings()
+
+        def _save_queue_column_width(self, column: int, _old: int, new: int) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            if new > 0:
+                self.controller.settings.queue_column_widths[str(column)] = new
+                self.controller.settings_mgr.save_settings()
+
+        def _save_queue_column_order(self, *_args: object) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            head = self.queue_table.horizontalHeader()
+            self.controller.settings.queue_column_order = [
+                head.logicalIndex(v) for v in range(head.count())
+            ]
+            self.controller.settings_mgr.save_settings()
 
         def _build_history_page(self) -> QtWidgets.QWidget:
             page = QtWidgets.QWidget()
@@ -965,6 +1057,32 @@ if PYSIDE6_AVAILABLE:
             self.chk_gpu_enable = QtWidgets.QCheckBox("Enable GPU Hardware Encoding when supported")
             self.chk_gpu_enable.setChecked(self.controller.resource_limits.enable_gpu_encoding)
             self.chk_gpu_enable.toggled.connect(self._on_resource_controls_edited)
+            self.gpu_backend_combo = QtWidgets.QComboBox()
+            for label, backend in (
+                ("Auto • detect working GPU", "auto"),
+                ("NVIDIA NVENC", "nvenc"),
+                ("Intel Quick Sync (QSV)", "qsv"),
+                ("AMD AMF", "amf"),
+                ("Apple VideoToolbox (macOS)", "videotoolbox"),
+            ):
+                self.gpu_backend_combo.addItem(label, backend)
+            preferred = self.controller.resource_limits.preferred_gpu_encoder
+            self.gpu_backend_combo.setCurrentIndex(
+                max(0, self.gpu_backend_combo.findData(preferred))
+            )
+            self.gpu_backend_combo.currentIndexChanged.connect(
+                self._on_resource_controls_edited
+            )
+            available = getattr(
+                self.controller.binaries, "available_video_encoders", set()
+            ) if self.controller.binaries else set()
+            possible = sorted(name for name in available if any(
+                backend in name for backend in ("nvenc", "qsv", "amf", "videotoolbox")
+            ))
+            self.gpu_backend_combo.setToolTip(
+                "FFmpeg-listed GPU encoders: " + (", ".join(possible) or "none")
+                + ". Selected hardware is verified by a test encode; CPU is fallback."
+            )
             with QtCore.QSignalBlocker(self.res_mode_combo):
                 idx = self.res_mode_combo.findData(self.controller.resource_limits.mode.value)
                 self.res_mode_combo.setCurrentIndex(max(0, idx))
@@ -987,8 +1105,16 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(QtWidgets.QLabel("Concurrent Jobs:"), 3, 0)
             grid.addWidget(self.concurrent_spin, 3, 1)
             grid.addWidget(self.chk_gpu_enable, 4, 0, 1, 2)
-            grid.addWidget(self.lbl_hard_cap_note, 5, 0, 1, 2)
-            grid.addWidget(self.lbl_best_effort_note, 6, 0, 1, 2)
+            grid.addWidget(QtWidgets.QLabel("GPU Accelerator:"), 5, 0)
+            grid.addWidget(self.gpu_backend_combo, 5, 1)
+            grid.addWidget(self.lbl_hard_cap_note, 6, 0, 1, 2)
+            grid.addWidget(self.lbl_best_effort_note, 7, 0, 1, 2)
+            if sys.platform == "darwin":
+                self.cpu_cap_combo.setEnabled(False)
+                self.lbl_hard_cap_note.setText(
+                    "macOS uses process priority and FFmpeg threads; "
+                    "Windows CPU Job Object hard caps are unavailable."
+                )
 
             v.addWidget(card)
             v.addStretch(1)
@@ -1123,12 +1249,17 @@ if PYSIDE6_AVAILABLE:
             self.convert_help.setText(t("convert_explanation"))
 
             self.queue_title.setText(t("nav_queue"))
-            self.queue_table.setHorizontalHeaderItem(
-                2, QtWidgets.QTableWidgetItem(t("queue_destination"))
+            self.queue_columns_btn.setText(t("queue_columns") + " ▾")
+            queue_headers = (
+                "queue_job_id", "queue_file", "queue_destination", "queue_status",
+                "queue_progress", "queue_speed", "queue_duration", "queue_result",
+                "queue_actions", "queue_start", "queue_finished",
             )
-            self.queue_table.setHorizontalHeaderItem(
-                8, QtWidgets.QTableWidgetItem(t("queue_actions"))
-            )
+            for col, key in enumerate(queue_headers):
+                self.queue_table.setHorizontalHeaderItem(
+                    col, QtWidgets.QTableWidgetItem(t(key))
+                )
+                self._queue_column_actions[col].setText(t(key))
             self.btn_pause_job.setText(t("queue_pause"))
             self.btn_resume_job.setText(t("queue_resume"))
             self.btn_cancel_job.setText(t("queue_cancel"))
@@ -1137,7 +1268,10 @@ if PYSIDE6_AVAILABLE:
 
             self.history_title.setText(t("comparison_header"))
             self.settings_title.setText(t("resource_section_title"))
-            self.lbl_hard_cap_note.setText(t("resource_hard_cap_note"))
+            self.lbl_hard_cap_note.setText(
+                "macOS: CPU threads/priority are best-effort; Windows-only CPU hard cap unavailable."
+                if sys.platform == "darwin" else t("resource_hard_cap_note")
+            )
             self.lbl_best_effort_note.setText(t("resource_best_effort_note"))
             self.theme_btn.setText(
                 t("theme_light") if self.controller.settings.theme == "dark" else t("theme_dark")
@@ -1585,9 +1719,10 @@ if PYSIDE6_AVAILABLE:
                     image_preset=ImagePreset(self.image_preset_combo.currentData()),
                     image_quality=self.image_quality_spin.value(),
                 )
-                self.controller.settings.after_export_action = AfterExportAction(
-                    self.after_action_combo.currentData()
-                ).value
+                self.controller.settings.after_export_action = (
+                    AfterExportAction.NONE.value if sys.platform != "win32"
+                    else AfterExportAction(self.after_action_combo.currentData()).value
+                )
                 self.controller.settings.skip_larger_outputs = self.skip_larger_check.isChecked()
                 self.controller.settings_mgr.save_settings()
                 self.image_quality_spin.setEnabled(
@@ -1671,16 +1806,12 @@ if PYSIDE6_AVAILABLE:
             row = self._find_or_create_job_row(item.spec.job_id)
             self.queue_table.setItem(row, 0, QtWidgets.QTableWidgetItem(item.spec.job_id))
             self.queue_table.setItem(row, 1, QtWidgets.QTableWidgetItem(item.spec.input_path.name))
-            # Never read the mutable global output directory here: different
-            # jobs can be sent to entirely different drives. For completed
-            # work the verified final result also handles replace-original,
-            # where the staged spec path is not the true final filename.
-            export_path = item.result.output_path if item.result else item.spec.output_path
-            destination_folder = str(export_path.parent)
-            destination_item = QtWidgets.QTableWidgetItem(destination_folder)
-            destination_item.setToolTip(destination_folder)
-            destination_item.setData(Qt.ItemDataRole.UserRole, destination_folder)
-            self.queue_table.setItem(row, 2, destination_item)
+            output_path = item.result.output_path if item.result else item.spec.output_path
+            dest = str(output_path.parent)
+            dest_item = QtWidgets.QTableWidgetItem(dest)
+            dest_item.setToolTip(dest)
+            dest_item.setData(Qt.ItemDataRole.UserRole, dest)
+            self.queue_table.setItem(row, 2, dest_item)
             self.queue_table.setItem(row, 3, QtWidgets.QTableWidgetItem(item.status.value.upper()))
             self.queue_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{item.progress.percent:.1f}%"))
             self.queue_table.setItem(
@@ -1690,72 +1821,130 @@ if PYSIDE6_AVAILABLE:
             )
             self.queue_table.setItem(
                 row, 6, QtWidgets.QTableWidgetItem(
-                    f"{format_duration(item.progress.elapsed_seconds)} / {format_duration(item.progress.eta_seconds)}"
+                    f"{format_duration(item.progress.elapsed_seconds)} / "
+                    f"{format_duration(item.progress.eta_seconds)}"
                 )
             )
+            result_item = QtWidgets.QTableWidgetItem("")
             if item.result:
-                res_txt = (
-                    f"{format_bytes(item.result.original_size_bytes)} -> {format_bytes(item.result.output_size_bytes)} "
-                    f"(-{item.result.reduction_percent:.1f}%)"
+                result = item.result
+                delta = result.space_saved_bytes
+                # Positive saved bytes → green, negative saved bytes → red.
+                # The neutral zero-difference case inherits the current theme.
+                if delta > 0:
+                    result_item.setForeground(QtGui.QBrush(QtGui.QColor("#31b878")))
+                elif delta < 0:
+                    result_item.setForeground(QtGui.QBrush(QtGui.QColor("#ef6868")))
+                result_item.setText(
+                    f"{format_bytes(result.original_size_bytes)} → "
+                    f"{format_bytes(result.output_size_bytes)} "
+                    f"({result.reduction_percent:+.1f}%)"
                 )
             elif item.error_message:
-                res_txt = item.error_message
-                if (
-                    "USB/HDD" in item.error_message
-                    and item.spec.job_id not in self._usb_error_alerted
-                ):
+                result_item.setText(item.error_message)
+                if ("USB/HDD" in item.error_message
+                        and item.spec.job_id not in self._usb_error_alerted):
                     self._usb_error_alerted.add(item.spec.job_id)
-                    self.warning_banner.setText(self.controller.translator.t("usb_disconnected"))
+                    self.warning_banner.setText(
+                        self.controller.translator.t("usb_disconnected")
+                    )
                     self.warning_banner.setVisible(True)
             else:
-                res_txt = item.resource_summary
-
-            self.queue_table.setItem(row, 7, QtWidgets.QTableWidgetItem(res_txt))
-            if item.result and item.result.output_path.is_file():
-                if self.queue_table.cellWidget(row, 8) is None:
-                    result = item.result
-                    actions = QtWidgets.QWidget()
-                    actions_row = QtWidgets.QHBoxLayout(actions)
-                    actions_row.setContentsMargins(1, 0, 1, 0)
-                    t = self.controller.translator.t
-                    # Keep the Open control compact but let the user choose
-                    # which distinct file to open: BEFORE or AFTER.
-                    open_btn = QtWidgets.QPushButton(t("queue_open") + " ▾")
-                    open_menu = QtWidgets.QMenu(open_btn)
-                    original = result.source_backup_path or result.input_path
-                    before_action = open_menu.addAction(
-                        "Before • ต้นฉบับ" if self.controller.translator.language == "th"
-                        else "Before • Original"
-                    )
-                    before_action.setEnabled(original.is_file())
-                    before_action.triggered.connect(
-                        lambda _checked=False, p=original: self._open_file_path(p)
-                    )
-                    after_action = open_menu.addAction(
-                        "After • ผลลัพธ์" if self.controller.translator.language == "th"
-                        else "After • Output"
-                    )
-                    after_action.setEnabled(result.output_path.is_file())
-                    after_action.triggered.connect(
-                        lambda _checked=False, p=result.output_path: self._open_file_path(p)
-                    )
-                    open_btn.setMenu(open_menu)
-                    actions_row.addWidget(open_btn)
-                    locate_btn = QtWidgets.QPushButton(t("queue_folder"))
-                    locate_btn.setToolTip("Open file location • เลือกไฟล์ผลลัพธ์ใน Explorer")
-                    locate_btn.clicked.connect(
-                        lambda _checked=False, r=result: self._open_output_folder(r)
-                    )
-                    actions_row.addWidget(locate_btn)
-                    compare_btn = QtWidgets.QPushButton(t("queue_compare"))
-                    compare_btn.clicked.connect(
-                        lambda _checked=False, r=result: self._show_completed_compare(r)
-                    )
-                    actions_row.addWidget(compare_btn)
-                    self.queue_table.setCellWidget(row, 8, actions)
-                    self.queue_table.setColumnWidth(8, 310)
-            elif self.queue_table.cellWidget(row, 7) is not None:
+                result_item.setText(item.resource_summary)
+            self.queue_table.setItem(row, 7, result_item)
+            self.queue_table.setItem(row, 9, QtWidgets.QTableWidgetItem(
+                item.started_at.replace("T", " ") if item.started_at else "—"
+            ))
+            self.queue_table.setItem(row, 10, QtWidgets.QTableWidgetItem(
+                item.finished_at.replace("T", " ") if item.finished_at else "—"
+            ))
+            current_widget = self.queue_table.cellWidget(row, 8)
+            # Preserve UI responsiveness: actions need rebuilding only when
+            # queue status or final result changes, not on every FFmpeg tick.
+            action_signature = (
+                item.status.value,
+                str(item.result.output_path) if item.result else "",
+            )
+            if current_widget and current_widget.property("actionSignature") == action_signature:
+                return
+            if current_widget:
                 self.queue_table.removeCellWidget(row, 8)
+            action_widget = QtWidgets.QWidget(self.queue_table)
+            action_widget.setProperty("actionSignature", action_signature)
+            buttons = QtWidgets.QHBoxLayout(action_widget)
+            buttons.setContentsMargins(2, 0, 2, 0)
+            buttons.setSpacing(4)
+            # Both folder shortcuts exist even before processing begins.
+            th = self.controller.translator.language == "th"
+            for text_label, target in (
+                ("ต้นทาง" if th else "Source", item.spec.input_path),
+                ("ปลายทาง" if th else "Output", output_path),
+            ):
+                button = QtWidgets.QToolButton()
+                button.setText(text_label)
+                button.setToolTip(str(target))
+                button.clicked.connect(
+                    lambda _checked=False, p=target: self._open_job_location(p)
+                )
+                buttons.addWidget(button)
+            more = QtWidgets.QToolButton()
+            more.setText("⋯")
+            more.setToolTip("Open / Compare / Retry")
+            more.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu = QtWidgets.QMenu(more)
+            original = (
+                item.result.source_backup_path
+                if item.result and item.result.source_backup_path
+                else item.spec.input_path
+            )
+            before_action = menu.addAction(
+                "เปิด Before" if th else "Open Before"
+            )
+            before_action.setEnabled(original.is_file())
+            before_action.triggered.connect(
+                lambda _checked=False, p=original: self._open_file_path(p)
+            )
+            after_action = menu.addAction(
+                "เปิด After" if th else "Open After"
+            )
+            after_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
+            after_action.triggered.connect(
+                lambda _checked=False, p=output_path: self._open_file_path(p)
+            )
+            compare_action = menu.addAction("เทียบภาพ" if th else "Compare")
+            compare_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
+            if item.result:
+                compare_action.triggered.connect(
+                    lambda _checked=False, r=item.result: self._show_completed_compare(r)
+                )
+            if item.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+                menu.addSeparator()
+                retry = menu.addAction("ลองใหม่" if th else "Retry")
+                retry.triggered.connect(
+                    lambda _checked=False, jid=item.spec.job_id: self._retry_job(jid)
+                )
+            more.setMenu(menu)
+            buttons.addWidget(more)
+            self.queue_table.setCellWidget(row, 8, action_widget)
+
+        def _open_job_location(self, target: Path) -> None:
+            """Reveal a finished file or open its folder while still queued."""
+            try:
+                if target.is_file():
+                    reveal_file_in_location(target)
+                elif target.parent.is_dir():
+                    if not QtGui.QDesktopServices.openUrl(
+                        QtCore.QUrl.fromLocalFile(str(target.parent))
+                    ):
+                        raise OSError(f"Cannot open directory: {target.parent}")
+                else:
+                    raise FileNotFoundError(f"Directory unavailable: {target.parent}")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+
+        def _retry_job(self, job_id: str) -> None:
+            if self.controller.queue_manager:
+                self.controller.queue_manager.retry_job(job_id)
 
         def _open_file_path(self, path: Path) -> None:
             if not path.is_file():
@@ -1950,7 +2139,9 @@ if PYSIDE6_AVAILABLE:
                     return
                 limits = self.controller.apply_resource_mode(mode)
 
-                for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+                for widget in (self.cpu_cap_combo, self.threads_spin,
+                               self.concurrent_spin, self.chk_gpu_enable,
+                               self.gpu_backend_combo):
                     widget.blockSignals(True)
                 try:
 
@@ -1958,9 +2149,14 @@ if PYSIDE6_AVAILABLE:
                     self.threads_spin.setValue(limits.cpu_threads)
                     self.concurrent_spin.setValue(limits.max_concurrent_jobs)
                     self.chk_gpu_enable.setChecked(limits.enable_gpu_encoding)
+                    self.gpu_backend_combo.setCurrentIndex(
+                        max(0, self.gpu_backend_combo.findData(limits.preferred_gpu_encoder))
+                    )
                 finally:
 
-                    for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+                    for widget in (self.cpu_cap_combo, self.threads_spin,
+                                   self.concurrent_spin, self.chk_gpu_enable,
+                                   self.gpu_backend_combo):
                         widget.blockSignals(False)
 
         def _on_resource_controls_edited(self, *_args: object) -> None:
@@ -1970,6 +2166,7 @@ if PYSIDE6_AVAILABLE:
                 cpu_threads=self.threads_spin.value(),
                 max_concurrent_jobs=self.concurrent_spin.value(),
                 enable_gpu_encoding=self.chk_gpu_enable.isChecked(),
+                preferred_gpu_encoder=str(self.gpu_backend_combo.currentData()),
             )
             with QtCore.QSignalBlocker(self.res_mode_combo):
                 idx = self.res_mode_combo.findData(ResourceMode.CUSTOM.value)

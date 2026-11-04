@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import json
+from datetime import datetime
 from pathlib import Path
 import subprocess
 import tempfile
@@ -116,6 +117,8 @@ class QueueItem:
     warnings: list[str] = field(default_factory=list)
     active_pid: Optional[int] = None
     resource_summary: str = ""
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
 
 
 class QueueManager:
@@ -304,8 +307,32 @@ class QueueManager:
         for jid in job_ids:
             self.cancel_job(jid)
 
+    def retry_job(self, job_id: str) -> bool:
+        """Explicit retry for a *single* failed or canceled job.
+
+        Requires the previous worker to have exited; prevents two processes
+        writing to one staged output or racing a replacement.
+        """
+        with self._lock:
+            item = self._items.get(job_id)
+            if not item or item.status not in (JobStatus.FAILED, JobStatus.CANCELLED):
+                return False
+            if job_id in self._processes:
+                return False
+            self._storage_paused = False
+            self._cancel_flags.discard(job_id)
+            item.status = JobStatus.QUEUED
+            item.progress = JobProgress()
+            item.result = None
+            item.error_message = ""
+            item.started_at = None
+            item.finished_at = None
+            self._notify_item(item)
+        self.start()
+        return True
+
     def retry_failed(self) -> int:
-        """Retry failed jobs after reconnecting missing source/destination disks."""
+        """Retry failed AND canceled jobs after reconnecting storage."""
         with self._lock:
             self._storage_paused = False
         retried = 0
@@ -317,6 +344,9 @@ class QueueManager:
                     item.status = JobStatus.QUEUED
                     item.error_message = ""
                     item.progress = JobProgress()
+                    item.result = None
+                    item.started_at = None
+                    item.finished_at = None
                     retried += 1
                     self._notify_item(item)
         if retried > 0:
@@ -335,6 +365,9 @@ class QueueManager:
                         cand = self._items[jid]
                         if cand.status == JobStatus.QUEUED and jid not in self._cancel_flags:
                             cand.status = JobStatus.VALIDATING
+                            if cand.started_at is None:
+                                cand.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+                            cand.finished_at = None
                             self._active_workers += 1
                             next_item = cand
                             break
@@ -734,6 +767,9 @@ class QueueManager:
                 pass
 
     def _notify_item(self, item: QueueItem) -> None:
+        if item.status in (JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.FAILED):
+            if item.finished_at is None:
+                item.finished_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._persist_queue()
         if self.on_job_updated:
             try:

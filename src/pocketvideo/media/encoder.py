@@ -241,7 +241,7 @@ def build_encode_plan(
         cand = spec.advanced.encoder_name
         if cand in binaries.available_video_encoders:
             video_encoder = cand
-            using_gpu = any(g in cand for g in ("nvenc", "qsv", "amf"))
+            using_gpu = any(g in cand for g in ("nvenc", "qsv", "amf", "videotoolbox"))
         else:
             warnings.append(
                 f"Requested encoder '{cand}' is unavailable; falling back to software encoder."
@@ -466,6 +466,26 @@ def build_encode_plan(
                 v_encode_args.extend(["-global_quality", str(crf_val)])
             elif "amf" in video_encoder:
                 v_encode_args.extend(["-rc", "cqp", "-qp_i", str(crf_val), "-qp_p", str(crf_val)])
+            elif "videotoolbox" in video_encoder:
+                # VideoToolbox uses bitrate rather than x264/x265 CRF.
+                # Bitrate is scaled conservatively with pixel count and the
+                # requested quality setting. Warn instead of promising
+                # bit-exact or CRF-equivalent hardware quality.
+                pixels = (
+                    primary_v.effective_width * primary_v.effective_height
+                    if primary_v else 1920 * 1080
+                )
+                scale = max(0.5, min(2.0, (36 - crf_val) / 14))
+                bits_per_second = max(
+                    800_000, min(50_000_000, int(pixels * 2.3 * scale))
+                )
+                v_encode_args.extend(["-b:v", str(bits_per_second)])
+                if video_encoder.startswith("hevc_") and container in ("mp4", "mov"):
+                    v_encode_args.extend(["-tag:v", "hvc1"])
+                warnings.append(
+                    "Apple VideoToolbox uses bitrate-based quality control; output "
+                    "size and quality differ from software CRF encoders."
+                )
         elif video_encoder == "libvpx-vp9":
             v_encode_args.extend(["-crf", str(crf_val), "-b:v", "0", "-cpu-used", "2"])
         elif video_encoder == "libsvtav1":

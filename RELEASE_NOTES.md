@@ -1,5 +1,13 @@
 # PocketVideo Release Notes
 
+## v1.3.0 — Development (not public Release)
+Queue customization, persisted column sizes and order, timestamps, readable results,
+preprocessing source/output folder shortcuts, compact responsive layout, per-job retry,
+and GPU backend preferences (NVENC, QSV, AMF, VideoToolbox when available).
+macOS source and .app CI alpha started. No notarized or released macOS distribution.
+
+# PocketVideo Release Notes
+
 ## v1.2.0 — Development (not a public release)
 
 Reliability improvements: queue recovery journal (manual resume), proactive

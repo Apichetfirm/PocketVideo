@@ -135,3 +135,15 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 - **SSIM / VMAF when available:** The Before/After video player can compare a bounded 6-second, 640x360, 8fps sample. This is diagnostic rather than full-duration scoring, and VMAF requires `libvmaf` in FFmpeg.
 - **Queue cleanup:** Fixes stale Action-column index when results disappear.
 - **Release compliance:** Public GitHub Release publishing is gated behind `POCKETVIDEO_RELEASE_APPROVED=true` repository Actions variable and a manual checklist in `docs/DISTRIBUTION_COMPLIANCE.md`. A green CI build does not settle rights/patents.
+
+
+## v1.3.0 — Queue and GPU usability (source development)
+- The processing queue shows **File Name, Started, Finished, Status, Progress %, FPS/Speed, Result, Destination, Actions** by default. The Job ID is hidden but can be enabled via **Choose columns**. Column visibility, widths, order and sidebar width are saved to user preferences.
+- Each queued/running job has direct **Source** and **Output** folder shortcuts (if its directory exists); completed jobs add Before/After open and synchronized comparison in a compact menu.
+- Result is **green when space is saved**, **red when output is larger**, and neutral for equal sizes. Canceled or failed jobs can be retried individually.
+- GPU acceleration supports **NVIDIA NVENC, Intel QSV, AMD AMF, Apple VideoToolbox (macOS)** when the FFmpeg build advertises the encoder and a real probe encode succeeds; if unavailable, falls back to CPU. GPU encoding does not guarantee smaller files, better quality or a percentage GPU cap.
+- Resource settings use compact labels and platform-specific limitations: Windows Job Object hard CPU cap is **Windows only**; macOS uses best-effort CPU threads/priority.
+
+### macOS alpha
+- A **macOS CI packaging workflow** begins a native .app alpha for testing using Python 3.12, PySide6, Pillow/HEIC and FFmpeg. The macOS app uses ~/Library/Application Support/PocketVideo and ~/Movies/PocketVideo_Output, Finder 'Reveal', and can probe VideoToolbox.
+- The macOS alpha is **not signed with an Apple Developer ID, notarized, or validated on real Apple Silicon and Intel Macs**. macOS sleep/shutdown are deliberately disabled; Windows-only CPU hard caps do not work on macOS. Do not treat a green macOS CI as public macOS release approval. See docs/MACOS_ALPHA.md.
