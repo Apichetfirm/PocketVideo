@@ -2201,7 +2201,11 @@ if PYSIDE6_AVAILABLE:
             self.history_table.setRowCount(len(history))
             for row, entry in enumerate(history):
                 output_ok = entry.output_path.is_file()
-                original_file = entry.source_backup_path or entry.input_path
+                original_file = (
+                    entry.source_backup_path if (
+                        entry.source_backup_path and entry.source_backup_path.is_file()
+                    ) else entry.input_path
+                )
                 original_ok = original_file.is_file()
                 if original_ok and output_ok:
                     state = t("history_files_present")

@@ -58,8 +58,9 @@ class UIResourceControlsTestSuite(unittest.TestCase):
                 self.assertEqual(window.concurrent_spin.value(), 1)
                 self.assertFalse(window.chk_gpu_enable.isChecked())
                 self.assertEqual(
-                    [window.cpu_cap_combo.itemData(n) for n in range(9)],
-                    [50, 60, 70, 75, 80, 85, 90, 95, 100],
+                    [window.cpu_cap_combo.itemData(n)
+                     for n in range(window.cpu_cap_combo.count())],
+                    [10, 20, 30, 40, 50, 60, 70, 75, 80, 85, 90, 95, 100, "custom"],
                 )
 
                 # Both the visual comparison table and the preset cards select

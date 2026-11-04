@@ -210,8 +210,12 @@ class SettingsManager:
             if not isinstance(raw, list):
                 return []
             entries: list[JobResultComparison] = []
+            required = {
+                "job_id", "input_path", "output_path",
+                "original_size_bytes", "output_size_bytes",
+            }
             for item in raw:
-                if not isinstance(item, dict):
+                if not isinstance(item, dict) or not required.issubset(item):
                     continue
                 try:
                     entries.append(JobResultComparison.from_dict(item))

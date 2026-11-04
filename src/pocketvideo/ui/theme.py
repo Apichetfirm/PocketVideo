@@ -88,6 +88,11 @@ def build_stylesheet(theme_name: str = "dark") -> str:
         border: 1px solid {p.border_subtle};
         border-radius: 8px;
     }}
+    QLabel#SavingsQuote {{
+        color: {p.accent_primary};
+        font-size: 15px;
+        font-weight: 600;
+    }}
     QToolTip {{
         background-color: {p.bg_secondary};
         color: {p.text_primary};

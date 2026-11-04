@@ -169,3 +169,12 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 - Both Windows and macOS CI build branded desktop executables. macOS CI runs **Apple Silicon (arm64)** and **Intel (x86_64)** separately, checks the app signature and runs packaged CLI compression with external FFmpeg removed from `PATH` to reduce false-positive smoke tests.
 - The macOS release workflow can perform Developer ID signing, hardened runtime, Apple `notarytool` notarization, stapling, and unsigned/signed artifact separation **only when the owner's Developer ID credentials and repository approval gates are configured**. This is not a claim of notarization or public release.
 - Binary redistribution and physical end-user Mac tests remain explicit go/no-go gates. See `docs/MACOS_DISTRIBUTION.md`.
+
+
+## v1.3.2 — Custom CPU limits and lifetime savings (development)
+- Windows **CPU Hard Cap** now offers 10%, 20%, 30%, 40%, 50%, 60%, 70%, 75%, 80%, 85%, 90%, 95%, 100% plus **Custom 10–100%** (increments of 1%). The exact choice is saved and restored. macOS shows the control as unavailable because Windows Job Objects do not exist there.
+- **FFmpeg Thread Count** has in-app help: `0 = Auto` is recommended; 4 threads requests a codec's worker threads, **not 4% CPU**, and an encoder may use other internal threads.
+- The **History** screen reads metadata captured when exports completed, even if the source or output files were later deleted or an external drive is disconnected. One malformed historical row can no longer hide every other valid row.
+- A separate `savings_stats.json` ledger persists **lifetime weighted net size reduction**, successful job count, and weighted percentage. It deduplicates by completed job ID and reconciles existing `history.json` automatically, while retaining totals after visible history is cleared or rotated. Missing original files never trigger recalculation or deletion of the snapshot.
+- Copy an accurate text summary or branded **1200×630 share image** to the clipboard. Quote: **“พื้นที่มากขึ้น ชีวิตก็มีความเป็นไปได้มากขึ้น”** / “More space, more possibilities.”
+- Important: this measures *before/after file-size difference*, not current *free disk space* if the original is still on disk. Negative net reduction is shown in red. Previously purged historical jobs cannot be reconstructed without their records.
