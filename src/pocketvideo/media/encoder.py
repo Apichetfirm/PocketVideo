@@ -241,7 +241,7 @@ def build_encode_plan(
         cand = spec.advanced.encoder_name
         if cand in binaries.available_video_encoders:
             video_encoder = cand
-            using_gpu = any(g in cand for g in ("nvenc", "qsv", "amf"))
+            using_gpu = any(g in cand for g in ("nvenc", "qsv", "amf", "videotoolbox"))
         else:
             warnings.append(
                 f"Requested encoder '{cand}' is unavailable; falling back to software encoder."

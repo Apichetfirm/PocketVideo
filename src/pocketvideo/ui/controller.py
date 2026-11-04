@@ -145,6 +145,7 @@ class AppController:
         cpu_threads: Optional[int] = None,
         max_concurrent_jobs: Optional[int] = None,
         enable_gpu_encoding: Optional[bool] = None,
+        preferred_gpu_encoder: Optional[str] = None,
     ) -> ResourceLimits:
         """Apply manual resource settings, persist them, and update queue concurrency."""
         cap = (
@@ -163,6 +164,12 @@ class AppController:
             self.resource_limits.enable_gpu_encoding
             if enable_gpu_encoding is None else bool(enable_gpu_encoding)
         )
+        vendor = (
+            self.resource_limits.preferred_gpu_encoder
+            if preferred_gpu_encoder is None else str(preferred_gpu_encoder)
+        )
+        if vendor not in ("auto", "nvenc", "qsv", "amf", "videotoolbox"):
+            raise ValueError(f"Unsupported GPU vendor: {vendor}")
         self.resource_limits = replace(
             self.resource_limits,
             mode=ResourceMode.CUSTOM,
@@ -171,6 +178,7 @@ class AppController:
             cpu_threads=threads,
             max_concurrent_jobs=concurrent,
             enable_gpu_encoding=gpu,
+            preferred_gpu_encoder=vendor,
         )
         self.settings.resource_mode = ResourceMode.CUSTOM.value
         self.settings.cpu_hard_cap_percent = cap
@@ -178,6 +186,7 @@ class AppController:
         self.settings.cpu_threads = threads
         self.settings.max_concurrent_jobs = concurrent
         self.settings.enable_gpu_encoding = gpu
+        self.settings.preferred_gpu_encoder = vendor
         self.settings_mgr.save_settings()
         if self.queue_manager:
             self.queue_manager.set_max_concurrent_jobs(concurrent)

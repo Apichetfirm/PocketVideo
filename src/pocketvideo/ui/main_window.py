@@ -20,6 +20,7 @@ Implements:
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import hashlib
 import tempfile
 import threading
@@ -788,7 +789,10 @@ if PYSIDE6_AVAILABLE:
             self.chk_adv_override.toggled.connect(self._sync_advanced_options)
 
             self.adv_encoder_combo = QtWidgets.QComboBox()
-            for enc in ["", "libx265", "libx264", "libvpx-vp9", "libsvtav1", "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv"]:
+            for enc in ["", "libx265", "libx264", "libvpx-vp9", "libsvtav1",
+                        "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv",
+                        "hevc_amf", "h264_amf", "hevc_videotoolbox",
+                        "h264_videotoolbox"]:
                 self.adv_encoder_combo.addItem(enc or "Auto (Preset Default)", enc)
             self.adv_encoder_combo.currentIndexChanged.connect(self._sync_advanced_options)
 
@@ -1044,6 +1048,33 @@ if PYSIDE6_AVAILABLE:
             self.chk_gpu_enable = QtWidgets.QCheckBox("Enable GPU Hardware Encoding when supported")
             self.chk_gpu_enable.setChecked(self.controller.resource_limits.enable_gpu_encoding)
             self.chk_gpu_enable.toggled.connect(self._on_resource_controls_edited)
+            self.gpu_backend_combo = QtWidgets.QComboBox()
+            for label, backend in (
+                ("Auto • detect working GPU", "auto"),
+                ("NVIDIA NVENC", "nvenc"),
+                ("Intel Quick Sync (QSV)", "qsv"),
+                ("AMD AMF", "amf"),
+                ("Apple VideoToolbox (macOS)", "videotoolbox"),
+            ):
+                self.gpu_backend_combo.addItem(label, backend)
+            preferred = self.controller.resource_limits.preferred_gpu_encoder
+            self.gpu_backend_combo.setCurrentIndex(
+                max(0, self.gpu_backend_combo.findData(preferred))
+            )
+            self.gpu_backend_combo.currentIndexChanged.connect(
+                self._on_resource_controls_edited
+            )
+            available = (
+                self.controller.binaries.available_video_encoders
+                if self.controller.binaries else set()
+            )
+            possible = sorted(name for name in available if any(
+                backend in name for backend in ("nvenc", "qsv", "amf", "videotoolbox")
+            ))
+            self.gpu_backend_combo.setToolTip(
+                "FFmpeg-listed GPU encoders: " + (", ".join(possible) or "none")
+                + ". Selected hardware is verified by a test encode; CPU is fallback."
+            )
             with QtCore.QSignalBlocker(self.res_mode_combo):
                 idx = self.res_mode_combo.findData(self.controller.resource_limits.mode.value)
                 self.res_mode_combo.setCurrentIndex(max(0, idx))
@@ -1066,8 +1097,16 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(QtWidgets.QLabel("Concurrent Jobs:"), 3, 0)
             grid.addWidget(self.concurrent_spin, 3, 1)
             grid.addWidget(self.chk_gpu_enable, 4, 0, 1, 2)
-            grid.addWidget(self.lbl_hard_cap_note, 5, 0, 1, 2)
-            grid.addWidget(self.lbl_best_effort_note, 6, 0, 1, 2)
+            grid.addWidget(QtWidgets.QLabel("GPU Accelerator:"), 5, 0)
+            grid.addWidget(self.gpu_backend_combo, 5, 1)
+            grid.addWidget(self.lbl_hard_cap_note, 6, 0, 1, 2)
+            grid.addWidget(self.lbl_best_effort_note, 7, 0, 1, 2)
+            if sys.platform == "darwin":
+                self.cpu_cap_combo.setEnabled(False)
+                self.lbl_hard_cap_note.setText(
+                    "macOS uses process priority and FFmpeg threads; "
+                    "Windows CPU Job Object hard caps are unavailable."
+                )
 
             v.addWidget(card)
             v.addStretch(1)
@@ -2088,7 +2127,9 @@ if PYSIDE6_AVAILABLE:
                     return
                 limits = self.controller.apply_resource_mode(mode)
 
-                for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+                for widget in (self.cpu_cap_combo, self.threads_spin,
+                               self.concurrent_spin, self.chk_gpu_enable,
+                               self.gpu_backend_combo):
                     widget.blockSignals(True)
                 try:
 
@@ -2096,9 +2137,14 @@ if PYSIDE6_AVAILABLE:
                     self.threads_spin.setValue(limits.cpu_threads)
                     self.concurrent_spin.setValue(limits.max_concurrent_jobs)
                     self.chk_gpu_enable.setChecked(limits.enable_gpu_encoding)
+                    self.gpu_backend_combo.setCurrentIndex(
+                        max(0, self.gpu_backend_combo.findData(limits.preferred_gpu_encoder))
+                    )
                 finally:
 
-                    for widget in (self.cpu_cap_combo, self.threads_spin, self.concurrent_spin, self.chk_gpu_enable):
+                    for widget in (self.cpu_cap_combo, self.threads_spin,
+                                   self.concurrent_spin, self.chk_gpu_enable,
+                                   self.gpu_backend_combo):
                         widget.blockSignals(False)
 
         def _on_resource_controls_edited(self, *_args: object) -> None:
@@ -2108,6 +2154,7 @@ if PYSIDE6_AVAILABLE:
                 cpu_threads=self.threads_spin.value(),
                 max_concurrent_jobs=self.concurrent_spin.value(),
                 enable_gpu_encoding=self.chk_gpu_enable.isChecked(),
+                preferred_gpu_encoder=str(self.gpu_backend_combo.currentData()),
             )
             with QtCore.QSignalBlocker(self.res_mode_combo):
                 idx = self.res_mode_combo.findData(ResourceMode.CUSTOM.value)

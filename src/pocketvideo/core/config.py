@@ -113,6 +113,8 @@ class AppSettings:
         self.max_concurrent_jobs = max(1, min(8, int(self.max_concurrent_jobs)))
         self.image_quality = max(1, min(100, int(self.image_quality)))
         self.skip_larger_outputs = bool(self.skip_larger_outputs)
+        if self.preferred_gpu_encoder not in ("auto", "nvenc", "qsv", "amf", "videotoolbox"):
+            self.preferred_gpu_encoder = "auto"
         allowed_columns = set(range(11))
         if not isinstance(self.queue_visible_columns, list):
             self.queue_visible_columns = [1, 9, 10, 3, 4, 5, 7, 2, 8]
