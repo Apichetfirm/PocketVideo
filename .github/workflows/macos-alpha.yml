@@ -44,6 +44,8 @@ jobs:
         run: python -m pytest -q
       - name: Build native macOS .app and icon
         run: bash packaging/build_macos.sh
+      - name: Audit bundled FFmpeg dylib relocations (clean-Mac guard)
+        run: python packaging/check_macos_dependencies.py dist/PocketVideo.app
       - name: Smoke test bundled app (no external FFmpeg on PATH)
         env:
           QT_QPA_PLATFORM: offscreen

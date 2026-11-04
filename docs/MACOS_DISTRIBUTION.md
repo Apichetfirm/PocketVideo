@@ -55,3 +55,11 @@ No credentials in source, logs, or build artifacts.
 References:
 - https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution
 - https://developer.apple.com/help/account/certificates/create-developer-id-certificates/
+
+
+## Standalone FFmpeg portability check
+The macOS alpha workflow runs `packaging/check_macos_dependencies.py` against
+the actual `.app` to reject dependencies with absolute Homebrew paths.
+It also launches the bundled app with Homebrew removed from `PATH`, then
+performs a full packaged compression. Passing both reduces (but does not
+eliminate) clean-machine compatibility risks.

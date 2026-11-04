@@ -18,6 +18,7 @@ DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=..\LICENSE
 InfoBeforeFile=..\THIRD_PARTY_NOTICES.md
+SetupIconFile=..\assets\pocketvideo.ico
 OutputDir=..\dist\installer
 OutputBaseFilename=PocketVideo-Setup-{#MyAppVersion}-win64
 Compression=lzma2/ultra64
