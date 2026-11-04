@@ -1,5 +1,18 @@
 # PocketVideo Release Notes
 
+## v1.3.2 — CPU Control & Shareable Savings (development)
+- 10–100% Windows CPU hard-cap menu with one-percent Custom value and
+  persistent selection; explanatory FFmpeg Threads help (0=Auto).
+- History metadata is independent of current source/output files and skips
+  corrupt rows individually. Saved lifetime totals are stored separately,
+  count verified completed jobs once and survive history pruning.
+- Weighted net saved bytes, percentage, file count, branded clipboard image
+  and social-copy text with the Thai quote
+  “พื้นที่มากขึ้น ชีวิตก็มีความเป็นไปได้มากขึ้น”.
+- Savings represent compression output-size differences, not guaranteed
+  currently reclaimed filesystem space while originals remain.
+
+
 ## v1.3.1 — Developer Build
 Original brand/app icons and platform-style buttons, clean menu actions,
 branded Windows installer and macOS Dock icon. Expanded macOS CI to Apple
