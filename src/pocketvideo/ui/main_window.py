@@ -1202,12 +1202,17 @@ if PYSIDE6_AVAILABLE:
             self.convert_help.setText(t("convert_explanation"))
 
             self.queue_title.setText(t("nav_queue"))
-            self.queue_table.setHorizontalHeaderItem(
-                2, QtWidgets.QTableWidgetItem(t("queue_destination"))
+            self.queue_columns_btn.setText(t("queue_columns") + " ▾")
+            queue_headers = (
+                "queue_job_id", "queue_file", "queue_destination", "queue_status",
+                "queue_progress", "queue_speed", "queue_duration", "queue_result",
+                "queue_actions", "queue_start", "queue_finished",
             )
-            self.queue_table.setHorizontalHeaderItem(
-                8, QtWidgets.QTableWidgetItem(t("queue_actions"))
-            )
+            for col, key in enumerate(queue_headers):
+                self.queue_table.setHorizontalHeaderItem(
+                    col, QtWidgets.QTableWidgetItem(t(key))
+                )
+                self._queue_column_actions[col].setText(t(key))
             self.btn_pause_job.setText(t("queue_pause"))
             self.btn_resume_job.setText(t("queue_resume"))
             self.btn_cancel_job.setText(t("queue_cancel"))
@@ -1750,16 +1755,12 @@ if PYSIDE6_AVAILABLE:
             row = self._find_or_create_job_row(item.spec.job_id)
             self.queue_table.setItem(row, 0, QtWidgets.QTableWidgetItem(item.spec.job_id))
             self.queue_table.setItem(row, 1, QtWidgets.QTableWidgetItem(item.spec.input_path.name))
-            # Never read the mutable global output directory here: different
-            # jobs can be sent to entirely different drives. For completed
-            # work the verified final result also handles replace-original,
-            # where the staged spec path is not the true final filename.
-            export_path = item.result.output_path if item.result else item.spec.output_path
-            destination_folder = str(export_path.parent)
-            destination_item = QtWidgets.QTableWidgetItem(destination_folder)
-            destination_item.setToolTip(destination_folder)
-            destination_item.setData(Qt.ItemDataRole.UserRole, destination_folder)
-            self.queue_table.setItem(row, 2, destination_item)
+            output_path = item.result.output_path if item.result else item.spec.output_path
+            dest = str(output_path.parent)
+            dest_item = QtWidgets.QTableWidgetItem(dest)
+            dest_item.setToolTip(dest)
+            dest_item.setData(Qt.ItemDataRole.UserRole, dest)
+            self.queue_table.setItem(row, 2, dest_item)
             self.queue_table.setItem(row, 3, QtWidgets.QTableWidgetItem(item.status.value.upper()))
             self.queue_table.setItem(row, 4, QtWidgets.QTableWidgetItem(f"{item.progress.percent:.1f}%"))
             self.queue_table.setItem(
@@ -1769,72 +1770,130 @@ if PYSIDE6_AVAILABLE:
             )
             self.queue_table.setItem(
                 row, 6, QtWidgets.QTableWidgetItem(
-                    f"{format_duration(item.progress.elapsed_seconds)} / {format_duration(item.progress.eta_seconds)}"
+                    f"{format_duration(item.progress.elapsed_seconds)} / "
+                    f"{format_duration(item.progress.eta_seconds)}"
                 )
             )
+            result_item = QtWidgets.QTableWidgetItem("")
             if item.result:
-                res_txt = (
-                    f"{format_bytes(item.result.original_size_bytes)} -> {format_bytes(item.result.output_size_bytes)} "
-                    f"(-{item.result.reduction_percent:.1f}%)"
+                result = item.result
+                delta = result.space_saved_bytes
+                # Positive saved bytes → green, negative saved bytes → red.
+                # The neutral zero-difference case inherits the current theme.
+                if delta > 0:
+                    result_item.setForeground(QtGui.QBrush(QtGui.QColor("#31b878")))
+                elif delta < 0:
+                    result_item.setForeground(QtGui.QBrush(QtGui.QColor("#ef6868")))
+                result_item.setText(
+                    f"{format_bytes(result.original_size_bytes)} → "
+                    f"{format_bytes(result.output_size_bytes)} "
+                    f"({result.reduction_percent:+.1f}%)"
                 )
             elif item.error_message:
-                res_txt = item.error_message
-                if (
-                    "USB/HDD" in item.error_message
-                    and item.spec.job_id not in self._usb_error_alerted
-                ):
+                result_item.setText(item.error_message)
+                if ("USB/HDD" in item.error_message
+                        and item.spec.job_id not in self._usb_error_alerted):
                     self._usb_error_alerted.add(item.spec.job_id)
-                    self.warning_banner.setText(self.controller.translator.t("usb_disconnected"))
+                    self.warning_banner.setText(
+                        self.controller.translator.t("usb_disconnected")
+                    )
                     self.warning_banner.setVisible(True)
             else:
-                res_txt = item.resource_summary
-
-            self.queue_table.setItem(row, 7, QtWidgets.QTableWidgetItem(res_txt))
-            if item.result and item.result.output_path.is_file():
-                if self.queue_table.cellWidget(row, 8) is None:
-                    result = item.result
-                    actions = QtWidgets.QWidget()
-                    actions_row = QtWidgets.QHBoxLayout(actions)
-                    actions_row.setContentsMargins(1, 0, 1, 0)
-                    t = self.controller.translator.t
-                    # Keep the Open control compact but let the user choose
-                    # which distinct file to open: BEFORE or AFTER.
-                    open_btn = QtWidgets.QPushButton(t("queue_open") + " ▾")
-                    open_menu = QtWidgets.QMenu(open_btn)
-                    original = result.source_backup_path or result.input_path
-                    before_action = open_menu.addAction(
-                        "Before • ต้นฉบับ" if self.controller.translator.language == "th"
-                        else "Before • Original"
-                    )
-                    before_action.setEnabled(original.is_file())
-                    before_action.triggered.connect(
-                        lambda _checked=False, p=original: self._open_file_path(p)
-                    )
-                    after_action = open_menu.addAction(
-                        "After • ผลลัพธ์" if self.controller.translator.language == "th"
-                        else "After • Output"
-                    )
-                    after_action.setEnabled(result.output_path.is_file())
-                    after_action.triggered.connect(
-                        lambda _checked=False, p=result.output_path: self._open_file_path(p)
-                    )
-                    open_btn.setMenu(open_menu)
-                    actions_row.addWidget(open_btn)
-                    locate_btn = QtWidgets.QPushButton(t("queue_folder"))
-                    locate_btn.setToolTip("Open file location • เลือกไฟล์ผลลัพธ์ใน Explorer")
-                    locate_btn.clicked.connect(
-                        lambda _checked=False, r=result: self._open_output_folder(r)
-                    )
-                    actions_row.addWidget(locate_btn)
-                    compare_btn = QtWidgets.QPushButton(t("queue_compare"))
-                    compare_btn.clicked.connect(
-                        lambda _checked=False, r=result: self._show_completed_compare(r)
-                    )
-                    actions_row.addWidget(compare_btn)
-                    self.queue_table.setCellWidget(row, 8, actions)
-                    self.queue_table.setColumnWidth(8, 310)
-            elif self.queue_table.cellWidget(row, 7) is not None:
+                result_item.setText(item.resource_summary)
+            self.queue_table.setItem(row, 7, result_item)
+            self.queue_table.setItem(row, 9, QtWidgets.QTableWidgetItem(
+                item.started_at.replace("T", " ") if item.started_at else "—"
+            ))
+            self.queue_table.setItem(row, 10, QtWidgets.QTableWidgetItem(
+                item.finished_at.replace("T", " ") if item.finished_at else "—"
+            ))
+            current_widget = self.queue_table.cellWidget(row, 8)
+            # Preserve UI responsiveness: actions need rebuilding only when
+            # queue status or final result changes, not on every FFmpeg tick.
+            action_signature = (
+                item.status.value,
+                str(item.result.output_path) if item.result else "",
+            )
+            if current_widget and current_widget.property("actionSignature") == action_signature:
+                return
+            if current_widget:
                 self.queue_table.removeCellWidget(row, 8)
+            action_widget = QtWidgets.QWidget(self.queue_table)
+            action_widget.setProperty("actionSignature", action_signature)
+            buttons = QtWidgets.QHBoxLayout(action_widget)
+            buttons.setContentsMargins(2, 0, 2, 0)
+            buttons.setSpacing(4)
+            # Both folder shortcuts exist even before processing begins.
+            th = self.controller.translator.language == "th"
+            for text_label, target in (
+                ("ต้นทาง" if th else "Source", item.spec.input_path),
+                ("ปลายทาง" if th else "Output", output_path),
+            ):
+                button = QtWidgets.QToolButton()
+                button.setText(text_label)
+                button.setToolTip(str(target))
+                button.clicked.connect(
+                    lambda _checked=False, p=target: self._open_job_location(p)
+                )
+                buttons.addWidget(button)
+            more = QtWidgets.QToolButton()
+            more.setText("⋯")
+            more.setToolTip("Open / Compare / Retry")
+            more.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu = QtWidgets.QMenu(more)
+            original = (
+                item.result.source_backup_path
+                if item.result and item.result.source_backup_path
+                else item.spec.input_path
+            )
+            before_action = menu.addAction(
+                "เปิด Before" if th else "Open Before"
+            )
+            before_action.setEnabled(original.is_file())
+            before_action.triggered.connect(
+                lambda _checked=False, p=original: self._open_file_path(p)
+            )
+            after_action = menu.addAction(
+                "เปิด After" if th else "Open After"
+            )
+            after_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
+            after_action.triggered.connect(
+                lambda _checked=False, p=output_path: self._open_file_path(p)
+            )
+            compare_action = menu.addAction("เทียบภาพ" if th else "Compare")
+            compare_action.setEnabled(bool(item.result and item.result.output_path.is_file()))
+            if item.result:
+                compare_action.triggered.connect(
+                    lambda _checked=False, r=item.result: self._show_completed_compare(r)
+                )
+            if item.status in (JobStatus.CANCELLED, JobStatus.FAILED):
+                menu.addSeparator()
+                retry = menu.addAction("ลองใหม่" if th else "Retry")
+                retry.triggered.connect(
+                    lambda _checked=False, jid=item.spec.job_id: self._retry_job(jid)
+                )
+            more.setMenu(menu)
+            buttons.addWidget(more)
+            self.queue_table.setCellWidget(row, 8, action_widget)
+
+        def _open_job_location(self, target: Path) -> None:
+            """Reveal a finished file or open its folder while still queued."""
+            try:
+                if target.is_file():
+                    reveal_file_in_location(target)
+                elif target.parent.is_dir():
+                    if not QtGui.QDesktopServices.openUrl(
+                        QtCore.QUrl.fromLocalFile(str(target.parent))
+                    ):
+                        raise OSError(f"Cannot open directory: {target.parent}")
+                else:
+                    raise FileNotFoundError(f"Directory unavailable: {target.parent}")
+            except (OSError, ValueError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+
+        def _retry_job(self, job_id: str) -> None:
+            if self.controller.queue_manager:
+                self.controller.queue_manager.retry_job(job_id)
 
         def _open_file_path(self, path: Path) -> None:
             if not path.is_file():
