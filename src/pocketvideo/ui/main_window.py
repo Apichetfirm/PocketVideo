@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - fallback when imported in headless env
     Signal = None  # type: ignore[assignment]
 
 from pocketvideo.core.i18n import format_bytes, format_duration
+from pocketvideo.core.savings import share_summary
 from pocketvideo.core.models import (
     CompatibilityMode,
     JobResultComparison,
@@ -62,7 +63,7 @@ from pocketvideo.queue.manager import (
     QueueItem, SUPPORTED_VIDEO_EXTENSIONS, discover_videos_in_folder,
 )
 from pocketvideo.ui.controller import AppController
-from pocketvideo.ui.theme import build_stylesheet
+from pocketvideo.ui.theme import build_stylesheet, DARK_PALETTE, LIGHT_PALETTE
 from pocketvideo.ui.file_actions import reveal_file_in_location
 from pocketvideo.ui.icons import app_icon, decorate_main_window, assign, icon
 
@@ -1013,18 +1014,78 @@ if PYSIDE6_AVAILABLE:
         def _build_history_page(self) -> QtWidgets.QWidget:
             page = QtWidgets.QWidget()
             v = QtWidgets.QVBoxLayout(page)
-            v.setContentsMargins(28, 24, 28, 24)
+            v.setContentsMargins(20, 16, 20, 16)
             v.setSpacing(12)
 
+            head = QtWidgets.QHBoxLayout()
             self.history_title = QtWidgets.QLabel()
             self.history_title.setObjectName("HeadingLabel")
-            v.addWidget(self.history_title)
+            head.addWidget(self.history_title, 1)
+            self.btn_history_refresh = QtWidgets.QPushButton()
+            assign(self.btn_history_refresh, "retry")
+            self.btn_history_refresh.clicked.connect(self._refresh_history_table)
+            head.addWidget(self.btn_history_refresh)
+            v.addLayout(head)
 
-            self.history_table = QtWidgets.QTableWidget(0, 7)
-            self.history_table.setHorizontalHeaderLabels([
-                "File", "Original Size", "Output Size", "Space Saved", "Reduction", "Resolution", "Codec"
-            ])
-            self.history_table.horizontalHeader().setStretchLastSection(True)
+            self.history_summary_card = QtWidgets.QFrame()
+            self.history_summary_card.setObjectName("CardFrame")
+            summary = QtWidgets.QVBoxLayout(self.history_summary_card)
+            summary.setContentsMargins(20, 16, 20, 16)
+            summary.setSpacing(8)
+            self.history_summary_heading = QtWidgets.QLabel()
+            self.history_summary_heading.setObjectName("SubheadingLabel")
+            summary.addWidget(self.history_summary_heading)
+
+            main_row = QtWidgets.QHBoxLayout()
+            self.history_total_value = QtWidgets.QLabel("0 B")
+            self.history_total_value.setObjectName("SavingsTotalValue")
+            self.history_total_value.setMinimumHeight(46)
+            self.history_total_value.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            main_row.addWidget(self.history_total_value, 1)
+            self.btn_copy_history = QtWidgets.QPushButton()
+            assign(self.btn_copy_history, "save")
+            self.btn_copy_history.clicked.connect(self._copy_history_stats)
+            main_row.addWidget(self.btn_copy_history)
+            self.btn_copy_history_image = QtWidgets.QPushButton()
+            assign(self.btn_copy_history_image, "compare")
+            self.btn_copy_history_image.clicked.connect(self._copy_history_image)
+            main_row.addWidget(self.btn_copy_history_image)
+            summary.addLayout(main_row)
+
+            detail_row = QtWidgets.QHBoxLayout()
+            detail_row.setSpacing(16)
+            self.history_jobs_value = QtWidgets.QLabel()
+            self.history_jobs_value.setObjectName("SubheadingLabel")
+            self.history_ratio_value = QtWidgets.QLabel()
+            self.history_ratio_value.setObjectName("SubheadingLabel")
+            detail_row.addWidget(self.history_jobs_value)
+            detail_row.addWidget(self.history_ratio_value)
+            detail_row.addStretch(1)
+            summary.addLayout(detail_row)
+            self.history_quote = QtWidgets.QLabel()
+            self.history_quote.setObjectName("SavingsQuote")
+            self.history_quote.setWordWrap(True)
+            summary.addWidget(self.history_quote)
+            self.history_note = QtWidgets.QLabel()
+            self.history_note.setObjectName("MutedLabel")
+            self.history_note.setWordWrap(True)
+            summary.addWidget(self.history_note)
+            v.addWidget(self.history_summary_card)
+
+            self.history_table = QtWidgets.QTableWidget(0, 9)
+            self.history_table.setAlternatingRowColors(True)
+            self.history_table.setSelectionBehavior(
+                QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+            )
+            self.history_table.setEditTriggers(
+                QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+            )
+            history_head = self.history_table.horizontalHeader()
+            history_head.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+            history_head.setSectionResizeMode(8, QtWidgets.QHeaderView.ResizeMode.Fixed)
+            self.history_table.setColumnWidth(8, 124)
             v.addWidget(self.history_table, 1)
             self._refresh_history_table()
             return page
@@ -1282,6 +1343,18 @@ if PYSIDE6_AVAILABLE:
             self.btn_retry_failed.setText(t("queue_retry_failed"))
 
             self.history_title.setText(t("comparison_header"))
+            self.history_summary_heading.setText(t("history_lifetime_title"))
+            self.history_quote.setText(t("history_lifetime_quote"))
+            self.history_note.setText(t("history_lifetime_note"))
+            self.btn_copy_history.setText(t("history_copy_text"))
+            self.btn_copy_history_image.setText(t("history_copy_image"))
+            self.btn_history_refresh.setText(t("history_refresh"))
+            self.history_table.setHorizontalHeaderLabels([
+                t("queue_file"), t("comparison_original"), t("comparison_compressed"),
+                t("comparison_saved"), t("comparison_reduction"),
+                "Resolution", "Codec", t("history_file_state"), t("history_actions"),
+            ])
+            self._refresh_history_table()
             self.settings_title.setText(t("resource_section_title"))
             self.lbl_hard_cap_note.setText(
                 "macOS: CPU threads/priority are best-effort; Windows-only CPU hard cap unavailable."
@@ -1294,6 +1367,8 @@ if PYSIDE6_AVAILABLE:
 
         def _switch_page(self, index: int) -> None:
             self.pages.setCurrentIndex(index)
+            if index == 3:
+                self._refresh_history_table()
             for idx, btn in enumerate(self.nav_buttons):
                 btn.setProperty("active", "true" if idx == index else "false")
                 btn.style().unpolish(btn)
@@ -2092,21 +2167,154 @@ if PYSIDE6_AVAILABLE:
         def _on_job_completed_ui(self, _comparison: JobResultComparison) -> None:
             self._refresh_history_table()
 
+        def _history_saved_label(self, value: int) -> str:
+            return ("-" if value < 0 else "") + format_bytes(abs(value))
+
+        def _history_palette(self):
+            return DARK_PALETTE if self.controller.settings.theme == "dark" else LIGHT_PALETTE
+
         def _refresh_history_table(self) -> None:
+            """Render immutable completed-job snapshots; no source needed."""
+            t = self.controller.translator.t
+            stats = self.controller.settings_mgr.load_savings_stats()
+            saved = stats.net_saved_bytes
+            palette = self._history_palette()
+            indicator = (
+                palette.success if saved > 0 else
+                palette.danger if saved < 0 else palette.text_primary
+            )
+            self.history_total_value.setText(self._history_saved_label(saved))
+            self.history_total_value.setStyleSheet(
+                f"font-size: 29px; font-weight: 700; color: {indicator};"
+            )
+            self.history_jobs_value.setText(
+                f"{t('history_lifetime_jobs')}: {stats.completed_jobs:,}"
+            )
+            self.history_ratio_value.setText(
+                f"{t('history_lifetime_ratio')}: {stats.reduction_percent:+.1f}%"
+            )
+            self.history_ratio_value.setStyleSheet(
+                f"font-weight: 600; color: {indicator};"
+            )
+
             history = self.controller.settings_mgr.load_history()
             self.history_table.setRowCount(len(history))
-            for idx, entry in enumerate(history):
-                self.history_table.setItem(idx, 0, QtWidgets.QTableWidgetItem(entry.output_path.name))
-                self.history_table.setItem(idx, 1, QtWidgets.QTableWidgetItem(format_bytes(entry.original_size_bytes)))
-                self.history_table.setItem(idx, 2, QtWidgets.QTableWidgetItem(format_bytes(entry.output_size_bytes)))
-                self.history_table.setItem(idx, 3, QtWidgets.QTableWidgetItem(format_bytes(entry.space_saved_bytes)))
-                self.history_table.setItem(idx, 4, QtWidgets.QTableWidgetItem(f"{entry.reduction_percent:.1f}%"))
-                self.history_table.setItem(
-                    idx, 5, QtWidgets.QTableWidgetItem(f"{entry.original_resolution} -> {entry.output_resolution}")
+            for row, entry in enumerate(history):
+                output_ok = entry.output_path.is_file()
+                original_file = entry.source_backup_path or entry.input_path
+                original_ok = original_file.is_file()
+                if original_ok and output_ok:
+                    state = t("history_files_present")
+                elif not original_ok and not output_ok:
+                    state = t("history_both_missing")
+                elif not original_ok:
+                    state = t("history_original_missing")
+                else:
+                    state = t("history_output_missing")
+                values = (
+                    entry.output_path.name,
+                    format_bytes(entry.original_size_bytes),
+                    format_bytes(entry.output_size_bytes),
+                    self._history_saved_label(entry.space_saved_bytes),
+                    f"{entry.reduction_percent:+.1f}%",
+                    f"{entry.original_resolution} → {entry.output_resolution}",
+                    f"{entry.original_codec} → {entry.output_codec}",
+                    state,
                 )
-                self.history_table.setItem(
-                    idx, 6, QtWidgets.QTableWidgetItem(f"{entry.original_codec} -> {entry.output_codec}")
+                for col, value in enumerate(values):
+                    item = QtWidgets.QTableWidgetItem(value)
+                    item.setToolTip(
+                        f"Before: {original_file}\nAfter: {entry.output_path}\n"
+                        "Historical measurement remains available even if files were deleted."
+                    )
+                    if col in (3, 4):
+                        item.setForeground(QtGui.QBrush(QtGui.QColor(
+                            palette.success if entry.space_saved_bytes > 0
+                            else palette.danger if entry.space_saved_bytes < 0
+                            else palette.text_primary
+                        )))
+                    elif col == 7 and not (original_ok and output_ok):
+                        item.setForeground(QtGui.QBrush(QtGui.QColor(palette.warning)))
+                    self.history_table.setItem(row, col, item)
+                folder_btn = QtWidgets.QToolButton(self.history_table)
+                folder_btn.setText(t("history_actions"))
+                folder_btn.setToolButtonStyle(
+                    Qt.ToolButtonStyle.ToolButtonTextBesideIcon
                 )
+                assign(folder_btn, "folder", size=14)
+                folder_btn.setPopupMode(
+                    QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+                )
+                menu = QtWidgets.QMenu(folder_btn)
+                for label, target in (("Before", original_file),
+                                      ("After", entry.output_path)):
+                    act = menu.addAction(label)
+                    act.setEnabled(target.parent.is_dir())
+                    act.triggered.connect(
+                        lambda _checked=False, p=target: self._open_job_location(p)
+                    )
+                folder_btn.setMenu(menu)
+                self.history_table.setCellWidget(row, 8, folder_btn)
+
+        def _copy_history_stats(self) -> None:
+            stats = self.controller.settings_mgr.load_savings_stats()
+            summary = share_summary(
+                stats, self.controller.translator.language,
+                self._history_saved_label(stats.net_saved_bytes),
+            )
+            QtGui.QGuiApplication.clipboard().setText(summary)
+
+        def _copy_history_image(self) -> None:
+            """Copy a branded 1200x630 scorecard to paste into social posts."""
+            stats = self.controller.settings_mgr.load_savings_stats()
+            palette = self._history_palette()
+            img = QtGui.QPixmap(1200, 630)
+            img.fill(QtGui.QColor(palette.bg_primary))
+            painter = QtGui.QPainter(img)
+            try:
+                painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+                gradient = QtGui.QLinearGradient(0, 0, 1200, 630)
+                gradient.setColorAt(0.0, QtGui.QColor("#12203F"))
+                gradient.setColorAt(1.0, QtGui.QColor("#29205C"))
+                painter.setBrush(QtGui.QBrush(gradient))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(QtCore.QRectF(24, 24, 1152, 582), 38, 38)
+                painter.drawPixmap(76, 62, app_icon(88).pixmap(88, 88))
+                painter.setPen(QtGui.QColor("#F8FAFC"))
+                painter.setFont(QtGui.QFont("Segoe UI", 26, QtGui.QFont.Weight.Bold))
+                painter.drawText(QtCore.QRect(190, 74, 895, 76),
+                                 Qt.AlignmentFlag.AlignVCenter, "PocketVideo")
+                painter.setFont(QtGui.QFont("Segoe UI", 23))
+                painter.setPen(QtGui.QColor("#CBD5E1"))
+                painter.drawText(QtCore.QRect(82, 162, 1000, 56),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 self.controller.translator.t("history_lifetime_title"))
+                saved = stats.net_saved_bytes
+                painter.setPen(QtGui.QColor(
+                    "#36DEA4" if saved > 0 else "#FF8E8E" if saved < 0 else "#FFFFFF"
+                ))
+                painter.setFont(QtGui.QFont("Segoe UI", 58, QtGui.QFont.Weight.Bold))
+                painter.drawText(QtCore.QRect(76, 220, 1040, 122),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 self._history_saved_label(saved))
+                painter.setPen(QtGui.QColor("#E2E8F0"))
+                painter.setFont(QtGui.QFont("Segoe UI", 24))
+                painter.drawText(QtCore.QRect(82, 344, 1050, 52),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 f"{stats.completed_jobs:,} files • "
+                                 f"{stats.reduction_percent:+.1f}% size reduction")
+                painter.setFont(QtGui.QFont("Segoe UI", 23))
+                painter.drawText(QtCore.QRect(82, 423, 1040, 62),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 self.controller.translator.t("history_lifetime_quote"))
+                painter.setPen(QtGui.QColor("#A6B5D6"))
+                painter.setFont(QtGui.QFont("Segoe UI", 14))
+                painter.drawText(QtCore.QRect(82, 533, 1035, 32),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 "Based on before/after sizes • github.com/Apichetfirm/PocketVideo")
+            finally:
+                painter.end()
+            QtGui.QGuiApplication.clipboard().setPixmap(img)
 
         def _selected_job_id(self) -> Optional[str]:
             row = self.queue_table.currentRow()
