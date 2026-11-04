@@ -84,7 +84,10 @@ class StatsQtTests(unittest.TestCase):
             try:
                 window._switch_page(3)
                 self.assertEqual(window.history_table.rowCount(), 1)
-                self.assertIn("ไม่มี", window.history_table.item(0, 7).text())
+                self.assertEqual(
+                    window.history_table.item(0, 7).text(),
+                    window.controller.translator.t("history_both_missing"),
+                )
                 self.assertIn("600", window.history_total_value.text())
                 window._copy_history_stats()
                 self.assertIn("600", QtGui.QGuiApplication.clipboard().text())

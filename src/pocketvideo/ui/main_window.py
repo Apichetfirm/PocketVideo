@@ -1115,15 +1115,35 @@ if PYSIDE6_AVAILABLE:
 
 
             self.cpu_cap_combo = QtWidgets.QComboBox()
-            for cap in (50, 60, 70, 75, 80, 85, 90, 95, 100):
+            self.cpu_cap_presets = (10, 20, 30, 40, 50, 60, 70, 75, 80, 85, 90, 95, 100)
+            for cap in self.cpu_cap_presets:
                 self.cpu_cap_combo.addItem(f"{cap}%", cap)
+            self.cpu_cap_combo.addItem("กำหนดเอง… / Custom…", "custom")
+            self.cpu_custom_spin = QtWidgets.QSpinBox()
+            self.cpu_custom_spin.setRange(10, 100)
+            self.cpu_custom_spin.setSuffix("%")
+            self.cpu_custom_spin.setSingleStep(1)
+            self.cpu_custom_spin.setToolTip("10–100% • Windows CPU Job Object hard cap")
+            self.cpu_cap_row = QtWidgets.QHBoxLayout()
+            self.cpu_cap_row.setContentsMargins(0, 0, 0, 0)
+            self.cpu_cap_row.addWidget(self.cpu_cap_combo, 2)
+            self.cpu_cap_row.addWidget(self.cpu_custom_spin, 1)
+            self.cpu_custom_spin.setVisible(False)
             self._set_cpu_cap_selection(self.controller.resource_limits.cpu_hard_cap_percent)
-            self.cpu_cap_combo.currentIndexChanged.connect(self._on_resource_controls_edited)
+            self.cpu_cap_combo.currentIndexChanged.connect(self._on_cpu_cap_choice_changed)
+            self.cpu_custom_spin.valueChanged.connect(self._on_resource_controls_edited)
 
             self.threads_spin = QtWidgets.QSpinBox()
             self.threads_spin.setRange(0, 64)
             self.threads_spin.setValue(self.controller.resource_limits.cpu_threads)
             self.threads_spin.valueChanged.connect(self._on_resource_controls_edited)
+            self.threads_spin.setToolTip(
+                "0 = Auto. Requests FFmpeg encoding worker threads, not CPU %. "
+                "Some codecs manage additional threads internally."
+            )
+            self.lbl_threads_help = QtWidgets.QLabel()
+            self.lbl_threads_help.setObjectName("MutedLabel")
+            self.lbl_threads_help.setWordWrap(True)
 
             self.concurrent_spin = QtWidgets.QSpinBox()
             self.concurrent_spin.setRange(1, 4)
@@ -1175,8 +1195,9 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(self.res_mode_combo, 0, 1)
             grid.addWidget(QtWidgets.QLabel("CPU Hard Cap (%):"), 1, 0)
 
-            grid.addWidget(self.cpu_cap_combo, 1, 1)
-            grid.addWidget(QtWidgets.QLabel("CPU Thread Count (0=Auto):"), 2, 0)
+            grid.addLayout(self.cpu_cap_row, 1, 1)
+            self.lbl_thread_count = QtWidgets.QLabel("FFmpeg Threads (0=Auto):")
+            grid.addWidget(self.lbl_thread_count, 2, 0)
             grid.addWidget(self.threads_spin, 2, 1)
             grid.addWidget(QtWidgets.QLabel("Concurrent Jobs:"), 3, 0)
             grid.addWidget(self.concurrent_spin, 3, 1)
@@ -1185,8 +1206,10 @@ if PYSIDE6_AVAILABLE:
             grid.addWidget(self.gpu_backend_combo, 5, 1)
             grid.addWidget(self.lbl_hard_cap_note, 6, 0, 1, 2)
             grid.addWidget(self.lbl_best_effort_note, 7, 0, 1, 2)
+            grid.addWidget(self.lbl_threads_help, 8, 0, 1, 2)
             if sys.platform == "darwin":
                 self.cpu_cap_combo.setEnabled(False)
+                self.cpu_custom_spin.setEnabled(False)
                 self.lbl_hard_cap_note.setText(
                     "macOS uses process priority and FFmpeg threads; "
                     "Windows CPU Job Object hard caps are unavailable."
@@ -1361,6 +1384,11 @@ if PYSIDE6_AVAILABLE:
                 if sys.platform == "darwin" else t("resource_hard_cap_note")
             )
             self.lbl_best_effort_note.setText(t("resource_best_effort_note"))
+            self.lbl_thread_count.setText(t("resource_threads_label"))
+            self.lbl_threads_help.setText(t("resource_threads_explanation"))
+            self.cpu_cap_combo.setItemText(
+                self.cpu_cap_combo.findData("custom"), t("resource_cpu_custom")
+            )
             self.theme_btn.setText(
                 t("theme_light") if self.controller.settings.theme == "dark" else t("theme_dark")
             )
@@ -2352,16 +2380,22 @@ if PYSIDE6_AVAILABLE:
 
 
         def _set_cpu_cap_selection(self, value: int) -> None:
-            value = int(value)
+            value = max(10, min(100, int(value)))
             idx = self.cpu_cap_combo.findData(value)
             if idx < 0:
-                # Preserve a saved value (including the built-in 40% Light mode)
-                # rather than silently increasing the user's CPU budget.
-                label = self.controller.translator.t("cpu_saved_custom", value=value)
-                self.cpu_cap_combo.addItem(label, value)
-                idx = self.cpu_cap_combo.findData(value)
-            with QtCore.QSignalBlocker(self.cpu_cap_combo):
+                idx = self.cpu_cap_combo.findData("custom")
+            with QtCore.QSignalBlocker(self.cpu_cap_combo), QtCore.QSignalBlocker(self.cpu_custom_spin):
+                self.cpu_custom_spin.setValue(value)
                 self.cpu_cap_combo.setCurrentIndex(idx)
+            self.cpu_custom_spin.setVisible(
+                self.cpu_cap_combo.currentData() == "custom"
+            )
+
+        def _on_cpu_cap_choice_changed(self, *_args: object) -> None:
+            self.cpu_custom_spin.setVisible(
+                self.cpu_cap_combo.currentData() == "custom"
+            )
+            self._on_resource_controls_edited()
 
         def _on_resource_mode_changed(self) -> None:
             mode_val = self.res_mode_combo.currentData()
@@ -2371,9 +2405,9 @@ if PYSIDE6_AVAILABLE:
                     return
                 limits = self.controller.apply_resource_mode(mode)
 
-                for widget in (self.cpu_cap_combo, self.threads_spin,
-                               self.concurrent_spin, self.chk_gpu_enable,
-                               self.gpu_backend_combo):
+                for widget in (self.cpu_cap_combo, self.cpu_custom_spin,
+                               self.threads_spin, self.concurrent_spin,
+                               self.chk_gpu_enable, self.gpu_backend_combo):
                     widget.blockSignals(True)
                 try:
 
@@ -2386,15 +2420,19 @@ if PYSIDE6_AVAILABLE:
                     )
                 finally:
 
-                    for widget in (self.cpu_cap_combo, self.threads_spin,
-                                   self.concurrent_spin, self.chk_gpu_enable,
-                                   self.gpu_backend_combo):
+                    for widget in (self.cpu_cap_combo, self.cpu_custom_spin,
+                                   self.threads_spin, self.concurrent_spin,
+                                   self.chk_gpu_enable, self.gpu_backend_combo):
                         widget.blockSignals(False)
 
         def _on_resource_controls_edited(self, *_args: object) -> None:
             self.controller.update_resource_controls(
 
-                cpu_hard_cap_percent=int(self.cpu_cap_combo.currentData()),
+                cpu_hard_cap_percent=(
+                    self.cpu_custom_spin.value()
+                    if self.cpu_cap_combo.currentData() == "custom"
+                    else int(self.cpu_cap_combo.currentData())
+                ),
                 cpu_threads=self.threads_spin.value(),
                 max_concurrent_jobs=self.concurrent_spin.value(),
                 enable_gpu_encoding=self.chk_gpu_enable.isChecked(),
