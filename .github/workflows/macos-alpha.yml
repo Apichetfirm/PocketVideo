@@ -31,6 +31,7 @@ jobs:
           set -euo pipefail
           test "$(uname -m)" = "${{ matrix.arch }}"
           brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          brew list dylibbundler >/dev/null 2>&1 || brew install dylibbundler
           ffmpeg -version | head -n 1
       - name: Install Python dependencies
         shell: bash

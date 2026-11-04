@@ -63,3 +63,13 @@ the actual `.app` to reject dependencies with absolute Homebrew paths.
 It also launches the bundled app with Homebrew removed from `PATH`, then
 performs a full packaged compression. Passing both reduces (but does not
 eliminate) clean-machine compatibility risks.
+
+
+## Qt-vs-Homebrew FFmpeg ABI separation
+The macOS app bundles Qt Multimedia and a separate FFmpeg command-line encoder.
+Their `libavcodec` libraries may share a Mach-O install name but not ABI.
+Builds must run `dylibbundler` on **copied binaries in the bundle only**, not on
+Homebrew's source binaries, to isolate Homebrew FFmpeg dylibs in
+`Contents/Frameworks/ffmpeg_libs`. Never resolve FFmpeg CLI's private
+`libavcodec` via `PySide6/Qt/lib`. Both arm64 and Intel CI must pass a
+real `ffmpeg -version` and encoded output smoke test from the packaged app.

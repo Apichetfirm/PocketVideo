@@ -40,3 +40,9 @@ rights signoff for redistribution of FFmpeg/HEVC/libheif binary dependencies.
 - The branded `.app` is **ad-hoc signed only** until a configured Developer
   ID signing/notarization workflow succeeds.
 - See `docs/MACOS_DISTRIBUTION.md` for setup, test matrix and release gates.
+
+
+## Build prerequisite (macOS)
+Install `dylibbundler` as well as FFmpeg:
+`brew install ffmpeg dylibbundler`. The packager isolates FFmpeg's own
+dylibs from Qt Multimedia's separate, ABI-incompatible FFmpeg libraries.
