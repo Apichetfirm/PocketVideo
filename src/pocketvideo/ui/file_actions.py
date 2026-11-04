@@ -23,6 +23,9 @@ def reveal_file_in_location(file_path: Path) -> bool:
             close_fds=True,
         )
         return True
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)], shell=False, close_fds=True)
+        return True
     # Best-effort fallback for developer/test environments outside Windows.
     from PySide6 import QtCore, QtGui
     return bool(QtGui.QDesktopServices.openUrl(

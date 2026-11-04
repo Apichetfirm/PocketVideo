@@ -711,6 +711,12 @@ if PYSIDE6_AVAILABLE:
                 max(0, self.after_action_combo.findData(
                     self.controller.settings.after_export_action))
             )
+            if sys.platform != "win32":
+                # No native macOS power-action integration yet; avoid exposing
+                # non-working choices or silently using Windows commands.
+                self.after_action_combo.setCurrentIndex(0)
+                for idx in (1, 2):
+                    self.after_action_combo.model().item(idx).setEnabled(False)
             self.after_action_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
 
             self.btn_start_compress = QtWidgets.QPushButton()
@@ -1260,7 +1266,10 @@ if PYSIDE6_AVAILABLE:
 
             self.history_title.setText(t("comparison_header"))
             self.settings_title.setText(t("resource_section_title"))
-            self.lbl_hard_cap_note.setText(t("resource_hard_cap_note"))
+            self.lbl_hard_cap_note.setText(
+                "macOS: CPU threads/priority are best-effort; Windows-only CPU hard cap unavailable."
+                if sys.platform == "darwin" else t("resource_hard_cap_note")
+            )
             self.lbl_best_effort_note.setText(t("resource_best_effort_note"))
             self.theme_btn.setText(
                 t("theme_light") if self.controller.settings.theme == "dark" else t("theme_dark")
@@ -1708,9 +1717,10 @@ if PYSIDE6_AVAILABLE:
                     image_preset=ImagePreset(self.image_preset_combo.currentData()),
                     image_quality=self.image_quality_spin.value(),
                 )
-                self.controller.settings.after_export_action = AfterExportAction(
-                    self.after_action_combo.currentData()
-                ).value
+                self.controller.settings.after_export_action = (
+                    AfterExportAction.NONE.value if sys.platform != "win32"
+                    else AfterExportAction(self.after_action_combo.currentData()).value
+                )
                 self.controller.settings.skip_larger_outputs = self.skip_larger_check.isChecked()
                 self.controller.settings_mgr.save_settings()
                 self.image_quality_spin.setEnabled(

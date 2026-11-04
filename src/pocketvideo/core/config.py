@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import tempfile
+import sys
 from typing import Optional
 
 from pocketvideo.core.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
@@ -36,6 +37,8 @@ def get_app_data_dir(custom_dir: Optional[Path] = None) -> Path:
         return path
     if os.name == "nt":
         base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     target = base / "PocketVideo"
@@ -45,7 +48,11 @@ def get_app_data_dir(custom_dir: Optional[Path] = None) -> Path:
 
 def get_default_output_dir() -> Path:
     """Return default separate output directory (never overwrites source files)."""
-    videos_dir = Path.home() / "Videos" / "PocketVideo_Output"
+    videos_dir = (
+        Path.home() / "Movies" / "PocketVideo_Output"
+        if sys.platform == "darwin"
+        else Path.home() / "Videos" / "PocketVideo_Output"
+    )
     return videos_dir
 
 
