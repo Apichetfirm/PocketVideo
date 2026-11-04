@@ -1,5 +1,14 @@
 # PocketVideo Release Notes
 
+## v1.3.1 — Developer Build
+Original brand/app icons and platform-style buttons, clean menu actions,
+branded Windows installer and macOS Dock icon. Expanded macOS CI to Apple
+Silicon and Intel with packaged compression smoke tests. Gated, opt-in
+Developer ID signing/notarization workflow included for authorized
+distribution; nothing is automatically signed or published.
+
+# PocketVideo Release Notes
+
 ## v1.3.0 — Development (not public Release)
 Queue customization, persisted column sizes and order, timestamps, readable results,
 preprocessing source/output folder shortcuts, compact responsive layout, per-job retry,

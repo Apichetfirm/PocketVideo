@@ -1,4 +1,4 @@
-name: macOS Alpha Build & Test
+name: macOS Alpha Build & Test — Apple Silicon + Intel
 
 on:
   push:
@@ -12,39 +12,63 @@ permissions:
 
 jobs:
   macos-alpha:
-    name: Build PocketVideo macOS alpha
-    runs-on: macos-15
+    name: Build PocketVideo macOS alpha (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, arch: arm64}
+          - {runner: macos-15-intel, arch: x86_64}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Ensure FFmpeg
+      - name: Verify native architecture and FFmpeg
+        shell: bash
         run: |
+          set -euo pipefail
+          test "$(uname -m)" = "${{ matrix.arch }}"
           brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
           ffmpeg -version | head -n 1
-      - name: Install Dependencies
+      - name: Install Python dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
           python -m pip install -e .
-      - name: Run backend + UI regression tests on macOS
+      - name: Run backend and desktop GUI regression tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
-      - name: Build alpha macOS App bundle
+      - name: Build native macOS .app and icon
         run: bash packaging/build_macos.sh
-      - name: Smoke-test macOS app binary
+      - name: Smoke test bundled app (no external FFmpeg on PATH)
         env:
           QT_QPA_PLATFORM: offscreen
+        shell: bash
         run: |
-          dist/PocketVideo.app/Contents/MacOS/PocketVideo --version
-          dist/PocketVideo.app/Contents/MacOS/PocketVideo --verify-video-player
-          test -s dist/macos-alpha/PocketVideo-1.3.0-macos-alpha.zip
-      - name: Upload alpha for technical testing only
+          set -euo pipefail
+          APP="dist/PocketVideo.app"
+          APP_EXE="$APP/Contents/MacOS/PocketVideo"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test -s assets/pocketvideo.icns
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP_EXE" --version
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP_EXE" --verify-video-player
+          mkdir -p dist/macos-smoke
+          ffmpeg -hide_banner -loglevel error -y -f lavfi \
+            -i testsrc2=size=160x90:rate=10:duration=1 \
+            -c:v libx264 dist/macos-smoke/original.mp4
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP_EXE" \
+            --cli-compress "$PWD/dist/macos-smoke/original.mp4" \
+            --output-dir "$PWD/dist/macos-smoke/output"
+          test -n "$(find dist/macos-smoke/output -type f -name '*.mp4' -size +0c -print -quit)"
+          test -s "dist/macos-alpha/PocketVideo-1.3.1-macos-${{ matrix.arch }}-alpha.zip"
+      - name: Upload unsigned/notarization-pending test build only
         uses: actions/upload-artifact@v4
         with:
-          name: PocketVideo-macOS-Alpha-Development
+          name: PocketVideo-macOS-${{ matrix.arch }}-Alpha
           path: |
             dist/macos-alpha/*.zip
             dist/macos-alpha/SHA256SUMS.txt

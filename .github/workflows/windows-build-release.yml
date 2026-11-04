@@ -138,13 +138,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Force -Path "dist/release" | Out-Null
-          Compress-Archive -Path "dist/PocketVideo/*" -DestinationPath "dist/release/PocketVideo-1.3.0-win64-portable.zip" -Force
+          Compress-Archive -Path "dist/PocketVideo/*" -DestinationPath "dist/release/PocketVideo-1.3.1-win64-portable.zip" -Force
           iscc "packaging/installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup packaging failed." }
-          Copy-Item "dist/installer/PocketVideo-Setup-1.3.0-win64.exe" "dist/release/" -Force
+          Copy-Item "dist/installer/PocketVideo-Setup-1.3.1-win64.exe" "dist/release/" -Force
           Copy-Item "LICENSE" "dist/release/LICENSE.txt" -Force
           Copy-Item "THIRD_PARTY_NOTICES.md" "dist/release/THIRD_PARTY_NOTICES.md" -Force
-          foreach ($Package in @('dist/release/PocketVideo-Setup-1.3.0-win64.exe', 'dist/release/PocketVideo-1.3.0-win64-portable.zip')) {
+          foreach ($Package in @('dist/release/PocketVideo-Setup-1.3.1-win64.exe', 'dist/release/PocketVideo-1.3.1-win64-portable.zip')) {
             if (-not (Test-Path $Package)) { throw "Required release package is missing: $Package" }
             if ((Get-Item $Package).Length -le 0) { throw "Release package is empty: $Package" }
           }
@@ -164,8 +164,8 @@ jobs:
         with:
           name: PocketVideo-Windows-x64-Packages
           path: |
-            dist/release/PocketVideo-Setup-1.3.0-win64.exe
-            dist/release/PocketVideo-1.3.0-win64-portable.zip
+            dist/release/PocketVideo-Setup-1.3.1-win64.exe
+            dist/release/PocketVideo-1.3.1-win64-portable.zip
             dist/release/SHA256SUMS.txt
             dist/release/LICENSE.txt
             dist/release/THIRD_PARTY_NOTICES.md
@@ -178,8 +178,8 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            dist/release/PocketVideo-Setup-1.3.0-win64.exe
-            dist/release/PocketVideo-1.3.0-win64-portable.zip
+            dist/release/PocketVideo-Setup-1.3.1-win64.exe
+            dist/release/PocketVideo-1.3.1-win64-portable.zip
             dist/release/SHA256SUMS.txt
             dist/release/LICENSE.txt
             dist/release/THIRD_PARTY_NOTICES.md
