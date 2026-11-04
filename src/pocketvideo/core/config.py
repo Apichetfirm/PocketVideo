@@ -94,6 +94,10 @@ class AppSettings:
     max_concurrent_jobs: int = 1
     enable_gpu_encoding: bool = False
     preferred_gpu_encoder: str = "auto"
+    queue_visible_columns: list[int] = field(default_factory=lambda: [1, 9, 10, 3, 4, 5, 7, 2, 8])
+    queue_column_widths: dict[str, int] = field(default_factory=dict)
+    queue_column_order: list[int] = field(default_factory=list)
+    queue_sidebar_width: int = 210
     preserve_metadata: bool = True
     preserve_subtitles: bool = True
     custom_ffmpeg_path: str = ""
@@ -109,6 +113,30 @@ class AppSettings:
         self.max_concurrent_jobs = max(1, min(8, int(self.max_concurrent_jobs)))
         self.image_quality = max(1, min(100, int(self.image_quality)))
         self.skip_larger_outputs = bool(self.skip_larger_outputs)
+        allowed_columns = set(range(11))
+        if not isinstance(self.queue_visible_columns, list):
+            self.queue_visible_columns = [1, 9, 10, 3, 4, 5, 7, 2, 8]
+        self.queue_visible_columns = [
+            int(x) for x in self.queue_visible_columns
+            if isinstance(x, int) and x in allowed_columns
+        ] or [1, 9, 10, 3, 4, 5, 7, 2, 8]
+        # Logical index 0 (job ID) remains stored even when hidden, so all
+        # underlying queue/selection actions remain correct.
+        if not isinstance(self.queue_column_widths, dict):
+            self.queue_column_widths = {}
+        self.queue_column_widths = {
+            str(k): max(55, min(1000, int(v)))
+            for k, v in self.queue_column_widths.items()
+            if str(k).isdigit() and int(k) in allowed_columns
+            and isinstance(v, (int, float))
+        }
+        if not isinstance(self.queue_column_order, list):
+            self.queue_column_order = []
+        self.queue_column_order = [
+            int(x) for x in self.queue_column_order
+            if isinstance(x, int) and x in allowed_columns
+        ]
+        self.queue_sidebar_width = max(135, min(320, int(self.queue_sidebar_width)))
         if self.default_image_format not in ("jpeg", "png", "webp", "heic", "avif"):
             self.default_image_format = "webp"
         if self.default_image_preset not in {p.value for p in ImagePreset}:

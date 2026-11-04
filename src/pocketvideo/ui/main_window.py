@@ -393,7 +393,8 @@ if PYSIDE6_AVAILABLE:
             # Left navigation sidebar
             sidebar = QtWidgets.QFrame()
             sidebar.setObjectName("SidebarFrame")
-            sidebar.setFixedWidth(235)
+            sidebar.setMinimumWidth(140)
+            sidebar.setMaximumWidth(340)
             side_v = QtWidgets.QVBoxLayout(sidebar)
             side_v.setContentsMargins(16, 20, 16, 20)
             side_v.setSpacing(8)
@@ -456,8 +457,16 @@ if PYSIDE6_AVAILABLE:
             self.pages.addWidget(self._build_history_page())
             self.pages.addWidget(self._build_settings_page())
 
-            main_h.addWidget(sidebar)
-            main_h.addWidget(self.pages, 1)
+            # User-resizable navigation; keep useful space for dense queue data.
+            self.main_splitter = QtWidgets.QSplitter(Qt.Orientation.Horizontal)
+            self.main_splitter.setChildrenCollapsible(False)
+            self.main_splitter.addWidget(sidebar)
+            self.main_splitter.addWidget(self.pages)
+            self.main_splitter.setStretchFactor(0, 0)
+            self.main_splitter.setStretchFactor(1, 1)
+            self.main_splitter.setSizes([self.controller.settings.queue_sidebar_width, 980])
+            self.main_splitter.splitterMoved.connect(self._save_sidebar_width)
+            main_h.addWidget(self.main_splitter, 1)
             self._switch_page(0)
 
         def _build_dashboard_page(self) -> QtWidgets.QWidget:
@@ -847,6 +856,10 @@ if PYSIDE6_AVAILABLE:
             v.addStretch(1)
             return page
 
+        def _save_sidebar_width(self, *_args: object) -> None:
+            self.controller.settings.queue_sidebar_width = self.main_splitter.sizes()[0]
+            self.controller.settings_mgr.save_settings()
+
         def _build_queue_page(self) -> QtWidgets.QWidget:
             page = QtWidgets.QWidget()
             v = QtWidgets.QVBoxLayout(page)
@@ -861,7 +874,9 @@ if PYSIDE6_AVAILABLE:
             self.overall_progress_bar.setRange(0, 100)
             v.addWidget(self.overall_progress_bar)
 
-            ctrl_row = QtWidgets.QHBoxLayout()
+            ctrl_row = QtWidgets.QGridLayout()
+            ctrl_row.setHorizontalSpacing(8)
+            ctrl_row.setVerticalSpacing(8)
             self.btn_pause_job = QtWidgets.QPushButton()
             self.btn_resume_job = QtWidgets.QPushButton()
             self.btn_cancel_job = QtWidgets.QPushButton()
@@ -874,34 +889,98 @@ if PYSIDE6_AVAILABLE:
             self.btn_cancel_all.clicked.connect(self._cancel_all_jobs)
             self.btn_retry_failed.clicked.connect(self._retry_failed_jobs)
 
-            for b in (
+            for idx, b in enumerate((
                 self.btn_pause_job,
                 self.btn_resume_job,
                 self.btn_cancel_job,
                 self.btn_cancel_all,
                 self.btn_retry_failed,
-            ):
-                ctrl_row.addWidget(b)
-            ctrl_row.addStretch(1)
+            )):
+                ctrl_row.addWidget(b, idx // 3, idx % 3)
+            self.queue_columns_btn = QtWidgets.QToolButton()
+            self.queue_columns_btn.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+            self.queue_columns_menu = QtWidgets.QMenu(self.queue_columns_btn)
+            self.queue_columns_btn.setMenu(self.queue_columns_menu)
+            ctrl_row.addWidget(self.queue_columns_btn, 1, 2)
             v.addLayout(ctrl_row)
 
-
-            self.queue_table = QtWidgets.QTableWidget(0, 9)
-            self.queue_table.setHorizontalHeaderLabels([
-
-                "Job ID", "File", "Destination", "Status", "Progress",
-                "FPS / Speed", "Elapsed / ETA", "Summary / Result", "Actions"
-            ])
-            # Destination sits next to the file name, so it remains useful
-            # even when many queue columns require horizontal scrolling.
-            self.queue_table.setColumnWidth(2, 295)
+            self.queue_table = QtWidgets.QTableWidget(0, 11)
             self.queue_table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-            self.queue_table.horizontalHeader().setStretchLastSection(False)
+            self.queue_table.setAlternatingRowColors(True)
+            header = self.queue_table.horizontalHeader()
+            header.setStretchLastSection(False)
+            header.setSectionsMovable(True)
+            header.setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.Interactive)
+            self._queue_column_defaults = {
+                0: 105, 1: 210, 2: 240, 3: 112, 4: 108, 5: 142,
+                6: 155, 7: 260, 8: 205, 9: 162, 10: 162,
+            }
+            # Column visibility, sizes and order survive application restart.
+            self._queue_column_actions = {}
+            self._restoring_queue_layout = True
+            for idx in range(11):
+                action = self.queue_columns_menu.addAction("")
+                action.setCheckable(True)
+                action.setChecked(idx in self.controller.settings.queue_visible_columns)
+                if idx == 1:
+                    action.setChecked(True)
+                    action.setEnabled(False)  # file name is always present
+                action.toggled.connect(
+                    lambda checked, col=idx: self._set_queue_column_visibility(col, checked)
+                )
+                self._queue_column_actions[idx] = action
+                self.queue_table.setColumnWidth(
+                    idx, self.controller.settings.queue_column_widths.get(
+                        str(idx), self._queue_column_defaults[idx]
+                    )
+                )
+                self.queue_table.setColumnHidden(idx, not action.isChecked())
+            order = self.controller.settings.queue_column_order or [
+                1, 9, 10, 3, 4, 5, 7, 2, 8, 6, 0,
+            ]
+            for visual, logical in enumerate(order):
+                if 0 <= logical < 11:
+                    header.moveSection(header.visualIndex(logical), visual)
+            self._restoring_queue_layout = False
+            header.sectionResized.connect(self._save_queue_column_width)
+            header.sectionMoved.connect(self._save_queue_column_order)
             self.queue_table.setSelectionBehavior(
                 QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
             )
             v.addWidget(self.queue_table, 1)
             return page
+
+        def _set_queue_column_visibility(self, column: int, visible: bool) -> None:
+            if column == 1:
+                return
+            self.queue_table.setColumnHidden(column, not visible)
+            self._save_queue_column_visibility()
+
+        def _save_queue_column_visibility(self) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            self.controller.settings.queue_visible_columns = [
+                col for col in range(11) if not self.queue_table.isColumnHidden(col)
+            ]
+            self.controller.settings_mgr.save_settings()
+
+        def _save_queue_column_width(self, column: int, _old: int, new: int) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            if new > 0:
+                self.controller.settings.queue_column_widths[str(column)] = new
+                self.controller.settings_mgr.save_settings()
+
+        def _save_queue_column_order(self, *_args: object) -> None:
+            if getattr(self, "_restoring_queue_layout", False):
+                return
+            head = self.queue_table.horizontalHeader()
+            self.controller.settings.queue_column_order = [
+                head.logicalIndex(v) for v in range(head.count())
+            ]
+            self.controller.settings_mgr.save_settings()
 
         def _build_history_page(self) -> QtWidgets.QWidget:
             page = QtWidgets.QWidget()
