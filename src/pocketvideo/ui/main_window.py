@@ -1073,10 +1073,9 @@ if PYSIDE6_AVAILABLE:
             self.gpu_backend_combo.currentIndexChanged.connect(
                 self._on_resource_controls_edited
             )
-            available = (
-                self.controller.binaries.available_video_encoders
-                if self.controller.binaries else set()
-            )
+            available = getattr(
+                self.controller.binaries, "available_video_encoders", set()
+            ) if self.controller.binaries else set()
             possible = sorted(name for name in available if any(
                 backend in name for backend in ("nvenc", "qsv", "amf", "videotoolbox")
             ))
