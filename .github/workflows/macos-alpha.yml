@@ -56,6 +56,16 @@ jobs:
           APP_EXE="$APP/Contents/MacOS/PocketVideo"
           codesign --verify --deep --strict --verbose=2 "$APP"
           test -s assets/pocketvideo.icns
+          BUNDLED_FFMPEG="$(find "$APP/Contents" -type f -name ffmpeg -print -quit)"
+          BUNDLED_FFPROBE="$(find "$APP/Contents" -type f -name ffprobe -print -quit)"
+          test -x "$BUNDLED_FFMPEG" && test -x "$BUNDLED_FFPROBE"
+          echo "Checking FFmpeg executable dependencies inside .app"
+          if ! env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$BUNDLED_FFMPEG" -version; then
+            echo "::error::Bundled FFmpeg failed outside Homebrew PATH"
+            otool -L "$BUNDLED_FFMPEG"
+            exit 1
+          fi
+          env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$BUNDLED_FFPROBE" -version
           env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP_EXE" --version
           env PATH="/usr/bin:/bin:/usr/sbin:/sbin" "$APP_EXE" --verify-video-player
           mkdir -p dist/macos-smoke
