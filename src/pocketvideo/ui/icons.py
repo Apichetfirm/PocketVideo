@@ -113,6 +113,10 @@ def decorate_main_window(window: QtWidgets.QMainWindow) -> None:
         "theme": ("theme_btn",),
         "compare": ("btn_toggle_advanced",),
     }
+    if getattr(window, "queue_columns_btn", None):
+        window.queue_columns_btn.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
     for semantic, attrs in groups.items():
         for attr in attrs:
             widget = getattr(window, attr, None)

@@ -6,6 +6,7 @@ import os
 from PyInstaller.utils.hooks import collect_dynamic_libs, copy_metadata
 
 repo_root = Path(SPECPATH).resolve().parent
+app_icon_file = repo_root / "assets" / "pocketvideo.ico"
 src_root = repo_root / "src"
 vendor_ffmpeg_bin = repo_root / "vendor" / "ffmpeg" / "bin"
 
@@ -20,6 +21,8 @@ datas_list = [
     (str(repo_root / "THIRD_PARTY_NOTICES.md"), "."),
     (str(repo_root / "README.md"), "."),
 ]
+if (repo_root / "assets" / "pocketvideo.png").is_file():
+    datas_list.append((str(repo_root / "assets" / "pocketvideo.png"), "assets"))
 # Bundle native HEIF codecs and their package metadata. The packaged HEIC
 # smoke test below must work without relying on source Python modules.
 binaries_list.extend(collect_dynamic_libs("pillow_heif"))
@@ -72,6 +75,7 @@ exe = EXE(
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch="x86_64",
+    icon=str(app_icon_file) if app_icon_file.is_file() else None,
 )
 
 coll = COLLECT(

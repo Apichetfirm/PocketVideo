@@ -1897,6 +1897,7 @@ if PYSIDE6_AVAILABLE:
             ):
                 button = QtWidgets.QToolButton()
                 button.setText(text_label)
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
                 assign(button, "folder", tooltip=str(target), size=14)
                 button.clicked.connect(
                     lambda _checked=False, p=target: self._open_job_location(p)

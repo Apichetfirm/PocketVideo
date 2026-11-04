@@ -32,6 +32,12 @@ jobs:
           pip install -r requirements-dev.txt
           pip install -e .
 
+      - name: Generate PocketVideo Windows App/Installer Icons
+        shell: pwsh
+        run: |
+          python packaging/generate_icons.py
+          if (-not (Test-Path assets/pocketvideo.ico)) { throw "PocketVideo icon missing" }
+
       - name: Fetch & Cryptographically Verify Redistributable FFmpeg/FFprobe (SHA-256)
         run: |
           python packaging/fetch_ffmpeg_windows.py
