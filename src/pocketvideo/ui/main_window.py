@@ -381,6 +381,9 @@ if PYSIDE6_AVAILABLE:
             self.apply_theme(self.controller.settings.theme)
             self.retranslate_ui()
             self._refresh_selection_summary()
+            if self.controller.queue_manager:
+                for recovered in self.controller.queue_manager.items():
+                    self._on_job_updated_ui(recovered)
 
         def _build_ui(self) -> None:
             root = QtWidgets.QWidget()

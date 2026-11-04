@@ -53,6 +53,7 @@ class ProcessingQueueDestinationTests(unittest.TestCase):
                 result=None,
                 error_message="",
                 resource_summary="",
+                started_at=None, finished_at=None,
             )
             # Queue item B was written to B; the planned staging path is in
             # another folder, so the verified result MUST take precedence.
@@ -82,13 +83,15 @@ class ProcessingQueueDestinationTests(unittest.TestCase):
                 result=result,
                 error_message="",
                 resource_summary="",
+                started_at="2026-11-04T14:30:00+07:00",
+                finished_at="2026-11-04T14:31:00+07:00",
             )
 
             controller = AppController()
             controller.output_dir = root / "unrelated-global-output"
             window = PocketVideoMainWindow(controller)
             try:
-                self.assertEqual(window.queue_table.columnCount(), 9)
+                self.assertEqual(window.queue_table.columnCount(), 11)
                 self.assertEqual(
                     window.queue_table.horizontalHeaderItem(2).text(), "บันทึกที่"
                 )
@@ -105,8 +108,14 @@ class ProcessingQueueDestinationTests(unittest.TestCase):
 
                 self.assertEqual(window.queue_table.item(0, 3).text(), "QUEUED")
                 self.assertEqual(window.queue_table.item(1, 3).text(), "COMPLETED")
-                self.assertIsNone(window.queue_table.cellWidget(0, 8))
+                # Shortcuts are available even for pending jobs.
+                self.assertIsNotNone(window.queue_table.cellWidget(0, 8))
                 self.assertIsNotNone(window.queue_table.cellWidget(1, 8))
+                self.assertEqual(window.queue_table.item(0, 9).text(), "—")
+                self.assertIn("2026-11-04", window.queue_table.item(1, 9).text())
+                self.assertIn("14:31", window.queue_table.item(1, 10).text())
+                self.assertTrue(window.queue_table.isColumnHidden(0))
+                self.assertFalse(window.queue_table.isColumnHidden(1))
 
                 # Updating a single job never overwrites another row's path.
                 controller.output_dir = root / "different-global-setting"
