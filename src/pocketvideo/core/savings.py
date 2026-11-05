@@ -21,6 +21,10 @@ class SavingsStats:
     smaller_jobs: int = 0
     larger_jobs: int = 0
     processed_ids: list[str] = field(default_factory=list, repr=False)
+    _processed_set: set[str] = field(default_factory=set, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._processed_set = set(self.processed_ids)
 
     @property
     def net_saved_bytes(self) -> int:
@@ -42,13 +46,14 @@ class SavingsStats:
                  result.completed_at_epoch], ensure_ascii=False
             )
             key = "legacy:" + hashlib.sha256(stable.encode("utf-8")).hexdigest()
-        if key in self.processed_ids:
+        if key in self._processed_set:
             return False
         original = int(result.original_size_bytes)
         output = int(result.output_size_bytes)
         if original < 0 or output < 0:
             return False
         self.processed_ids.append(key)
+        self._processed_set.add(key)
         self.completed_jobs += 1
         self.original_bytes += original
         self.output_bytes += output
@@ -94,7 +99,7 @@ def share_summary(stats: SavingsStats, language: str, bytes_label: str) -> str:
             f"PocketVideo • My compression results 🎬\n"
             f"{stats.completed_jobs:,} files processed • Net reduction: "
             f"{bytes_label} ({pct:+.1f}%)\n"
-            "“More space, more possibilities.”\n"
+            "“More Space. More Possibilities.”\n"
             "Based on before/after file sizes; physical free space depends "
             "on whether originals are retained.\n"
             "https://github.com/Apichetfirm/PocketVideo"
@@ -103,7 +108,7 @@ def share_summary(stats: SavingsStats, language: str, bytes_label: str) -> str:
         "PocketVideo • สถิติการบีบอัดของฉัน 🎬\n"
         f"จัดการแล้ว {stats.completed_jobs:,} ไฟล์ • ลดขนาดสุทธิ "
         f"{bytes_label} ({pct:+.1f}%)\n"
-        "“พื้นที่มากขึ้น ชีวิตก็มีความเป็นไปได้มากขึ้น”\n"
+        "“More Space. More Possibilities.”\n"
         "คำนวณจากขนาดไฟล์ก่อน–หลัง; พื้นที่ว่างจริงขึ้นกับ"
         "การเก็บหรือลบต้นฉบับ\n"
         "https://github.com/Apichetfirm/PocketVideo"
