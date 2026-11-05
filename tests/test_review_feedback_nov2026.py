@@ -49,13 +49,15 @@ class CoreReviewRegressionTests(unittest.TestCase):
             output.write_bytes(b"b" * 200)
             expected = fingerprint(source)
             result = comparison(source, output)
-            self.assertEqual(verified_original_for_trash(result, expected), source)
+            self.assertEqual(verified_original_for_trash(result, expected, fingerprint(output)), source)
             with self.assertRaises(ValueError):
-                verified_original_for_trash(result, None)
+                verified_original_for_trash(result, None, fingerprint(output))
+            expected_output = fingerprint(output)
             output.write_bytes(b"changed")
             with self.assertRaises(ValueError):
-                verified_original_for_trash(result, expected)
+                verified_original_for_trash(result, expected, expected_output)
             output.write_bytes(b"b" * 200)
+            expected_output = fingerprint(output)
             source.write_bytes(b"c" * 1100)
             with self.assertRaises(OSError):
                 verified_original_for_trash(result, expected)
