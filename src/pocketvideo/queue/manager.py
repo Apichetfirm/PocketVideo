@@ -38,7 +38,7 @@ from pocketvideo.media.images import (
     SUPPORTED_IMAGE_EXTENSIONS, inspect_image, encode_image,
 )
 from pocketvideo.core.output_safety import (
-    StorageDisconnectedError, confirm_source, ensure_storage,
+    StorageDisconnectedError, confirm_source, ensure_storage, fingerprint,
     promote_verified_output,
 )
 from pocketvideo.resources.job_object import (
@@ -118,6 +118,7 @@ class QueueItem:
     warnings: list[str] = field(default_factory=list)
     active_pid: Optional[int] = None
     resource_summary: str = ""
+    verified_output_fingerprint: tuple[int, int, int, int] | None = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
 
@@ -232,7 +233,7 @@ class QueueManager:
         with self._lock:
             self._items[spec.job_id] = item
             self._order.append(spec.job_id)
-            self._max_concurrent = max(1, spec.resource_limits.max_concurrent_jobs)
+            self._max_concurrent = max(1, min(8, spec.resource_limits.max_concurrent_jobs))
         self._notify_item(item)
         if auto_start:
             self.start()
@@ -626,6 +627,7 @@ class QueueManager:
                 ),
             )
 
+            item.verified_output_fingerprint = fingerprint(actual_output_path)
             item.result = comparison
             item.progress.percent = 100.0
             item.status = JobStatus.COMPLETED
@@ -780,6 +782,7 @@ class QueueManager:
                     else None
                 ),
             )
+            item.verified_output_fingerprint = fingerprint(actual)
             item.result = result
             item.progress.percent = 100.0
             item.status = JobStatus.COMPLETED
