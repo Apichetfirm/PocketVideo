@@ -171,6 +171,10 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 - Binary redistribution and physical end-user Mac tests remain explicit go/no-go gates. See `docs/MACOS_DISTRIBUTION.md`.
 
 
+## v1.3.4 — HEVC 2-Pass Windows Hotfix (development)
+
+- Windows libx265 two-pass statistics now use FFmpeg `-passlogfile`, avoiding invalid `C:` values in x265 colon-delimited options. Both passes are exercised in regression tests. No public release is created automatically.
+
 ## v1.3.3 — Compression Review (development)
 
 This update fixes the completion callback bug that previously prevented saving some successful exports. Lifetime stats now persist across cleared history and removed originals. Previously unsaved jobs cannot be reconstructed without additional evidence.

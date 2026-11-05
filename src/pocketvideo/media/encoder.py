@@ -430,13 +430,12 @@ def build_encode_plan(
             if video_encoder == "libx265" and container in ("mp4", "mov"):
                 common_v_args.extend(["-tag:v", "hvc1"])
 
-        if video_encoder == "libx265":
-            stats_file = str(passlog_prefix.with_suffix(".x265.log")).replace("\\", "/")
-            pass1_v = common_v_args + ["-x265-params", f"pass=1:no-slow-firstpass=1:stats={stats_file}"]
-            pass2_v = common_v_args + ["-x265-params", f"pass=2:stats={stats_file}"]
-        else:
-            pass1_v = common_v_args + ["-pass", "1", "-passlogfile", str(passlog_prefix)]
-            pass2_v = common_v_args + ["-pass", "2", "-passlogfile", str(passlog_prefix)]
+        # FFmpeg passes -passlogfile to libx265 as the x265-stats option.
+        # Do not embed an absolute stats path in colon-delimited -x265-params:
+        # the drive letter in Windows paths (C:\\...) breaks option parsing.
+        # This same path-safe mechanism works for libx264 and libvpx-vp9.
+        pass1_v = common_v_args + ["-pass", "1", "-passlogfile", str(passlog_prefix)]
+        pass2_v = common_v_args + ["-pass", "2", "-passlogfile", str(passlog_prefix)]
 
         pass1_cmd = (
             base_input_args

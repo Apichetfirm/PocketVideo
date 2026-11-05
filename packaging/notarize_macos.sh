@@ -70,9 +70,9 @@ xcrun stapler staple --verbose "$APP"
 xcrun stapler validate --verbose "$APP"
 spctl --assess --type execute --verbose=4 "$APP"
 
-ZIP="dist/macos-signed/PocketVideo-1.3.3-macos-${ARCH}-notarized.zip"
+ZIP="dist/macos-signed/PocketVideo-1.3.4-macos-${ARCH}-notarized.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-DMG="dist/macos-signed/PocketVideo-1.3.3-macos-${ARCH}-notarized.dmg"
+DMG="dist/macos-signed/PocketVideo-1.3.4-macos-${ARCH}-notarized.dmg"
 hdiutil create -ov -format UDZO -volname PocketVideo \
   -srcfolder "$APP" "$DMG"
 shasum -a 256 "$ZIP" "$DMG" > dist/macos-signed/SHA256SUMS.txt

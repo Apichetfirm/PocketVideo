@@ -269,30 +269,58 @@ class PocketVideoTestSuite(unittest.TestCase):
         self.assertTrue(out_path.exists())
 
     def test_05b_maximum_space_saving_optional_two_pass(self) -> None:
+        """Run real HEVC two-pass, including paths with spaces and Windows drive colons."""
         from pocketvideo.core.models import AdvancedEncodingOptions
+        import os
 
         meta = inspect_media(self.h264_audio_mp4, self.binaries)
         output = build_safe_output_path(
             self.h264_audio_mp4, self.outputs_dir, "mp4", suffix_tag="_max_twopass"
         )
+        # On Windows the absolute temporary path has C:; on POSIX simulate
+        # a colon inside a normal directory name. Old -x265-params failed.
+        log_dir = self.work_dir / (
+            "windows paths with spaces" if os.name == "nt" else "C: simulated Windows stats"
+        )
         spec = EncodingJobSpec(
             input_path=self.h264_audio_mp4, output_path=output,
             operation_mode=OperationMode.COMPRESS,
             preset_id=PresetId.MAX_SPACE_SAVING,
-            compatibility_mode=CompatibilityMode.MAX_COMPATIBILITY,
-            advanced=AdvancedEncodingOptions(max_saving_two_pass=True),
+            compatibility_mode=CompatibilityMode.MODERN_ANDROID,
+            advanced=AdvancedEncodingOptions(
+                max_saving_two_pass=True,
+                override_enabled=True,
+                encoder_speed_preset="ultrafast",
+            ),
         )
-        plan = build_encode_plan(spec, meta, self.binaries, self.work_dir)
+        plan = build_encode_plan(spec, meta, self.binaries, log_dir)
+        self.assertEqual(plan.video_encoder, "libx265")
         self.assertEqual(len(plan.passes), 2)
-        for command in plan.passes:
+        self.assertIsNotNone(plan.passlogfile_prefix)
+        assert plan.passlogfile_prefix is not None
+        self.assertIn(":", str(plan.passlogfile_prefix))
+        for pass_num, command in enumerate(plan.passes, 1):
             self.assertIn("-b:v", command)
             self.assertNotIn("-crf", command)
-        qm = QueueManager(self.binaries, work_dir=self.work_dir)
+            self.assertNotIn("-x265-params", command)
+            self.assertEqual(command[command.index("-pass") + 1], str(pass_num))
+            self.assertEqual(
+                command[command.index("-passlogfile") + 1],
+                str(plan.passlogfile_prefix),
+            )
+            self.assertIn("0:v:0", command)
+            # DJI djmd/dbgi data streams must not be mapped into the output.
+            self.assertFalse(any(value.startswith("0:d") for value in command))
+        self.assertIn("0:a?", plan.passes[1])
+        qm = QueueManager(self.binaries, work_dir=log_dir)
         item = qm.enqueue(spec, input_metadata=meta)
-        self.assertTrue(qm.wait_for_all(timeout=90))
+        self.assertTrue(qm.wait_for_all(timeout=120))
         self.assertEqual(item.status, JobStatus.COMPLETED, item.error_message)
         self.assertTrue(output.is_file())
         self.assertGreater(output.stat().st_size, 0)
+        converted = inspect_media(output, self.binaries)
+        self.assertEqual(converted.primary_video.codec_name, "hevc")
+        self.assertEqual(len(converted.audio_streams), 1)
 
     def test_06_unicode_thai_filename_and_before_after_preview(self) -> None:
         app_dir = self.temp_root / "appdata_thai"
