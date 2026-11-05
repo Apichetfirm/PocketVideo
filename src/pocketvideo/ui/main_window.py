@@ -2128,9 +2128,7 @@ if PYSIDE6_AVAILABLE:
                     "ย้ายต้นฉบับลงถังขยะ" if th else "Move Original to Trash"
                 )
                 try:
-                    verified_original_for_trash(
-                        item.result, item.spec.source_fingerprint
-                    )
+                    self._verified_trash_candidate(item)
                 except (OSError, ValueError):
                     delete_action.setEnabled(False)
                 delete_action.triggered.connect(
@@ -2523,25 +2521,46 @@ if PYSIDE6_AVAILABLE:
                 return
             self._refresh_history_table()
 
+        def _verified_trash_candidate(self, item: QueueItem) -> Path:
+            if item.result is None or item.status != JobStatus.COMPLETED:
+                raise ValueError("Only successfully verified exports can delete originals.")
+            path = verified_original_for_trash(
+                item.result, item.spec.source_fingerprint,
+                item.verified_output_fingerprint,
+            )
+            # Never remove a file still being read as input or required as
+            # another output in this queue.
+            manager = self.controller.queue_manager
+            if manager is not None:
+                for other in manager.items():
+                    if other.spec.job_id == item.spec.job_id:
+                        continue
+                    if (other.status not in (
+                        JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED
+                    ) and other.spec.input_path.resolve() == path.resolve()):
+                        raise ValueError("Another active or pending job uses this original.")
+                    if (other.status == JobStatus.COMPLETED and other.result
+                            and other.result.output_path.resolve() == path.resolve()):
+                        raise ValueError("This original is also an exported result of another job.")
+            return path
+
         def _trash_original_job(self, job_id: str) -> None:
             manager = self.controller.queue_manager
             item = manager.get_item(job_id) if manager else None
             if not item or item.status != JobStatus.COMPLETED or not item.result:
                 return
             try:
-                original = verified_original_for_trash(
-                    item.result, item.spec.source_fingerprint
-                )
+                original = self._verified_trash_candidate(item)
             except (ValueError, OSError) as exc:
                 QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
                 return
             th = self.controller.translator.language == "th"
             message = (
                 f"ย้ายต้นฉบับลงถังขยะ?\\n{original}\\n"
-                f"ผลลัพธ์ที่ตรวจแล้ว: {item.result.output_path}"
+                f"ผลลัพธ์ที่ตรวจแล้ว: {item.result.output_path}\\nล้างถังขยะจึงจะได้พื้นที่ว่างคืน"
                 if th else
                 f"Move this original to the OS Trash/Recycle Bin?\\n{original}\\n"
-                f"Verified output: {item.result.output_path}"
+                f"Verified output: {item.result.output_path}\\nEmpty the Trash to reclaim disk space."
             )
             if QtWidgets.QMessageBox.question(
                 self, "PocketVideo", message,
@@ -2551,7 +2570,7 @@ if PYSIDE6_AVAILABLE:
             ) != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
             try:
-                verified_original_for_trash(item.result, item.spec.source_fingerprint)
+                self._verified_trash_candidate(item)
                 if not QtCore.QFile.moveToTrash(str(original)):
                     raise OSError("Could not move original to Trash. File was kept.")
             except (ValueError, OSError) as exc:
@@ -2570,9 +2589,7 @@ if PYSIDE6_AVAILABLE:
                 if item.status != JobStatus.COMPLETED or item.result is None:
                     continue
                 try:
-                    path = verified_original_for_trash(
-                        item.result, item.spec.source_fingerprint
-                    )
+                    path = self._verified_trash_candidate(item)
                 except (OSError, ValueError):
                     continue
                 key = str(path.resolve()).casefold()
@@ -2591,11 +2608,11 @@ if PYSIDE6_AVAILABLE:
             message = (
                 f"ย้าย {len(eligible)} ไฟล์ลงถังขยะ?\\n"
                 f"ขนาดต้นฉบับรวม: {format_bytes(size)}\\n"
-                "ตรวจสอบไฟล์ผลลัพธ์แล้ว และจะไม่แตะงานที่ล้มเหลว"
+                "ไฟล์ที่ล้มเหลวจะไม่ถูกแตะต้อง • ล้างถังขยะจึงจะคืนพื้นที่ว่าง"
                 if th else
                 f"Move {len(eligible)} originals to OS Trash/Recycle Bin?\\n"
                 f"Total original size: {format_bytes(size)}\\n"
-                "Failed/unverified exports will not be touched."
+                "Failed/unverified exports will not be touched. Empty Trash to reclaim space."
             )
             if QtWidgets.QMessageBox.question(
                 self, "PocketVideo", message,
@@ -2608,9 +2625,7 @@ if PYSIDE6_AVAILABLE:
             errors = []
             for item, path in eligible:
                 try:
-                    verified_original_for_trash(
-                        item.result, item.spec.source_fingerprint
-                    )
+                    self._verified_trash_candidate(item)
                     if not QtCore.QFile.moveToTrash(str(path)):
                         raise OSError("OS Trash rejected file")
                     removed += 1
