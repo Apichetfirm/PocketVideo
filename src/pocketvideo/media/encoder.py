@@ -346,8 +346,14 @@ def build_encode_plan(
         else preset_desc.encoder_preset
     )
 
+    maximum_two_pass = (
+        spec.preset_id == PresetId.MAX_SPACE_SAVING
+        and spec.advanced.max_saving_two_pass
+        and effective_mode == OperationMode.COMPRESS
+    )
     use_two_pass = (
         spec.preset_id == PresetId.CUSTOM_SIZE
+        or maximum_two_pass
         or (
             spec.advanced.override_enabled
             and spec.advanced.force_two_pass
@@ -356,10 +362,20 @@ def build_encode_plan(
     )
 
     if use_two_pass:
-        if using_gpu:
-            video_encoder = "libx265" if desired_codec in ("hevc", "h265") else "libx264"
-            using_gpu = False
-            warnings.append("Switched to software encoder for genuine two-pass bitrate accuracy.")
+        # Two-pass needs software encoders with an actual stats-file workflow.
+        software_encoder = (
+            "libvpx-vp9" if container == "webm"
+            else "libx265" if desired_codec in ("hevc", "h265")
+            else "libx264"
+        )
+        if video_encoder != software_encoder:
+            warnings.append("Using compatible software encoder for genuine two-pass encoding.")
+        video_encoder = software_encoder
+        using_gpu = False
+        if video_encoder not in binaries.available_video_encoders:
+            raise EncodingValidationError(
+                f"Two-pass requires unavailable software encoder: {video_encoder}."
+            )
 
         target_plan: Optional[TargetSizePlan] = None
         if spec.preset_id == PresetId.CUSTOM_SIZE:
@@ -383,6 +399,20 @@ def build_encode_plan(
                     )
                     audio_encoder = "aac" if container != "webm" else "libopus"
                     audio_args = ["-c:a", audio_encoder, "-b:a", f"{per_stream_kbps}k"]
+        elif maximum_two_pass:
+            # The CRF preset has no deterministic size. Opt-in two-pass instead
+            # chooses a conservative *video bitrate target* based on the source;
+            # users must understand that audio/containers affect the final size.
+            source_bps = (
+                (primary_v.bit_rate if primary_v and primary_v.bit_rate else 0)
+                or max(0, media.overall_bit_rate - media.total_audio_bitrate_bps)
+                or int(media.file_size_bytes * 8 / max(media.duration_seconds, 0.001))
+            )
+            video_kbps = max(64, int(source_bps * 0.50 / 1000))
+            warnings.append(
+                "Maximum-saving 2-pass targets about half the source video bitrate; "
+                "quality and final size depend on the content, audio and container."
+            )
         else:
             video_kbps = int(spec.advanced.video_bitrate_kbps or 1500)
 
