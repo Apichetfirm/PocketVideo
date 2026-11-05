@@ -268,6 +268,32 @@ class PocketVideoTestSuite(unittest.TestCase):
         self.assertEqual(item.status, JobStatus.COMPLETED)
         self.assertTrue(out_path.exists())
 
+    def test_05b_maximum_space_saving_optional_two_pass(self) -> None:
+        from pocketvideo.core.models import AdvancedEncodingOptions
+
+        meta = inspect_media(self.h264_audio_mp4, self.binaries)
+        output = build_safe_output_path(
+            self.h264_audio_mp4, self.outputs_dir, "mp4", suffix_tag="_max_twopass"
+        )
+        spec = EncodingJobSpec(
+            input_path=self.h264_audio_mp4, output_path=output,
+            operation_mode=OperationMode.COMPRESS,
+            preset_id=PresetId.MAX_SPACE_SAVING,
+            compatibility_mode=CompatibilityMode.MAX_COMPATIBILITY,
+            advanced=AdvancedEncodingOptions(max_saving_two_pass=True),
+        )
+        plan = build_encode_plan(spec, meta, self.binaries, self.work_dir)
+        self.assertEqual(len(plan.passes), 2)
+        for command in plan.passes:
+            self.assertIn("-b:v", command)
+            self.assertNotIn("-crf", command)
+        qm = QueueManager(self.binaries, work_dir=self.work_dir)
+        item = qm.enqueue(spec, input_metadata=meta)
+        self.assertTrue(qm.wait_for_all(timeout=90))
+        self.assertEqual(item.status, JobStatus.COMPLETED, item.error_message)
+        self.assertTrue(output.is_file())
+        self.assertGreater(output.stat().st_size, 0)
+
     def test_06_unicode_thai_filename_and_before_after_preview(self) -> None:
         app_dir = self.temp_root / "appdata_thai"
         ctrl = AppController(

@@ -47,7 +47,7 @@ LIGHT_PALETTE = ThemePalette(
     bg_primary="#F8FAFC",
     bg_secondary="#F1F5F9",
     bg_card="#FFFFFF",
-    bg_card_selected="#EFF6FF",
+    bg_card_selected="#CFE5FF",
     border_subtle="#CBD5E1",
     border_accent="#0284C7",
     text_primary="#0F172A",
@@ -122,8 +122,8 @@ def build_stylesheet(theme_name: str = "dark") -> str:
         color: {p.text_primary};
         gridline-color: {p.border_subtle};
         border: 1px solid {p.border_subtle};
-        selection-background-color: {p.bg_card_selected};
-        selection-color: {p.text_primary};
+        selection-background-color: {p.accent_primary};
+        selection-color: #FFFFFF;
     }}
     QHeaderView::section {{
         background-color: {p.bg_secondary};
@@ -156,7 +156,10 @@ def build_stylesheet(theme_name: str = "dark") -> str:
     }}
     QFrame#PresetCard[selected="true"] {{
         background-color: {p.bg_card_selected};
-        border: 2px solid {p.border_accent};
+        border: 3px solid {p.border_accent};
+    }}
+    QFrame#PresetCard[selected="true"] QLabel#SubheadingLabel {{
+        color: {p.text_primary};
     }}
     QLabel#HeadingLabel {{
         font-size: 18px;

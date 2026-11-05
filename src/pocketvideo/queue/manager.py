@@ -24,6 +24,7 @@ from pocketvideo.core.models import (
     JobStatus,
     MediaMetadata,
 )
+from pocketvideo.core.file_metadata import copy_source_timestamps
 from pocketvideo.media.binaries import BinaryPaths, _get_CreationFlags
 from pocketvideo.queue.persistence import QueueJournal, serialize_spec
 from pocketvideo.media.encoder import (
@@ -37,7 +38,7 @@ from pocketvideo.media.images import (
     SUPPORTED_IMAGE_EXTENSIONS, inspect_image, encode_image,
 )
 from pocketvideo.core.output_safety import (
-    StorageDisconnectedError, confirm_source, ensure_storage,
+    StorageDisconnectedError, confirm_source, ensure_storage, fingerprint,
     promote_verified_output,
 )
 from pocketvideo.resources.job_object import (
@@ -117,6 +118,7 @@ class QueueItem:
     warnings: list[str] = field(default_factory=list)
     active_pid: Optional[int] = None
     resource_summary: str = ""
+    verified_output_fingerprint: tuple[int, int, int, int] | None = None
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
 
@@ -190,6 +192,20 @@ class QueueManager:
         with self._lock:
             self._max_concurrent = max(1, min(8, int(count)))
 
+    def clear_finished(self) -> int:
+        """Forget terminal queue entries without deleting files or lifetime totals."""
+        with self._lock:
+            terminal = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}
+            removed = [jid for jid in self._order if self._items[jid].status in terminal
+                       and jid not in self._processes]
+            self._order = [jid for jid in self._order if jid not in removed]
+            for jid in removed:
+                self._items.pop(jid, None)
+                self._cancel_flags.discard(jid)
+        self._persist_queue()
+        self._notify_summary()
+        return len(removed)
+
     def items(self) -> list[QueueItem]:
         with self._lock:
             return [self._items[jid] for jid in self._order if jid in self._items]
@@ -217,7 +233,7 @@ class QueueManager:
         with self._lock:
             self._items[spec.job_id] = item
             self._order.append(spec.job_id)
-            self._max_concurrent = max(1, spec.resource_limits.max_concurrent_jobs)
+            self._max_concurrent = max(1, min(8, spec.resource_limits.max_concurrent_jobs))
         self._notify_item(item)
         if auto_start:
             self.start()
@@ -562,6 +578,7 @@ class QueueManager:
                     "Encoded output is not smaller than the original; kept source."
                 )
             confirm_source(item.spec.input_path, item.spec.source_fingerprint)
+            source_stat = item.spec.input_path.stat()
             try:
                 actual_output_path, preserved_backup = promote_verified_output(
                     plan.temp_output_path, plan.final_output_path,
@@ -574,6 +591,11 @@ class QueueManager:
                 raise
             if preserved_backup:
                 item.warnings.append(f"Previous file safely backed up at: {preserved_backup}")
+            if item.spec.advanced.preserve_metadata:
+                try:
+                    copy_source_timestamps(source_stat, actual_output_path)
+                except (OSError, ValueError) as exc:
+                    item.warnings.append(f"Could not preserve original file timestamps: {exc}")
 
             elapsed_total = max(0.01, time.monotonic() - started_monotonic)
             orig_size = item.input_metadata.file_size_bytes
@@ -605,6 +627,7 @@ class QueueManager:
                 ),
             )
 
+            item.verified_output_fingerprint = fingerprint(actual_output_path)
             item.result = comparison
             item.progress.percent = 100.0
             item.status = JobStatus.COMPLETED
@@ -725,12 +748,18 @@ class QueueManager:
                 raise LargerOutputSkipped(
                     "Compressed image would be larger than the original; kept source."
                 )
+            source_stat = src.stat()
             actual, backup = promote_verified_output(
                 staged, dst, src, item.spec.output_policy,
                 item.spec.source_fingerprint,
             )
             if backup is not None:
                 item.warnings.append(f"Previous file safely backed up at: {backup}")
+            if item.spec.advanced.preserve_metadata:
+                try:
+                    copy_source_timestamps(source_stat, actual)
+                except (OSError, ValueError) as exc:
+                    item.warnings.append(f"Could not preserve original file timestamps: {exc}")
             original_size = item.input_metadata.file_size_bytes if item.input_metadata else src.stat().st_size
             new_size = actual.stat().st_size
             result = JobResultComparison(
@@ -753,6 +782,7 @@ class QueueManager:
                     else None
                 ),
             )
+            item.verified_output_fingerprint = fingerprint(actual)
             item.result = result
             item.progress.percent = 100.0
             item.status = JobStatus.COMPLETED

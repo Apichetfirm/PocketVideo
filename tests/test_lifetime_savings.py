@@ -110,12 +110,12 @@ class SavingsPersistenceTests(unittest.TestCase):
         stats = SavingsStats()
         stats.add(completed("one", Path("lost.mp4"), Path("after.mp4"), 100, 20))
         thai = share_summary(stats, "th", "80 B")
-        self.assertIn("พื้นที่มากขึ้น", thai)
+        self.assertIn("More Space. More Possibilities.", thai)
         self.assertIn("ต้นฉบับ", thai)
         self.assertIn("80 B", thai)
         self.assertIn("80.0%", thai)
         english = share_summary(stats, "en", "80 B")
-        self.assertIn("More space, more possibilities", english)
+        self.assertIn("More Space. More Possibilities.", english)
 
 
 if __name__ == "__main__":

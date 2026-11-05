@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - fallback when imported in headless env
 
 from pocketvideo.core.i18n import format_bytes, format_duration
 from pocketvideo.core.savings import share_summary
+from pocketvideo.core.original_cleanup import verified_original_for_trash
 from pocketvideo.core.models import (
     CompatibilityMode,
     JobResultComparison,
@@ -75,8 +76,31 @@ if PYSIDE6_AVAILABLE:
         job_updated = Signal(object)
         queue_summary = Signal(float, int, int)
         job_completed = Signal(object)
+        history_error = Signal(str)
         preview_ready = Signal(str, str)
         import_ready = Signal(object, object)
+
+    class WheelSafeComboBox(QtWidgets.QComboBox):
+        """Mouse wheel scrolls the enclosing page, not the selected setting."""
+        def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+            event.ignore()
+
+    class WheelSafeSpinBox(QtWidgets.QSpinBox):
+        def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+            event.ignore()
+
+    class WheelSafeDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+        def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+            event.ignore()
+
+    class ConcurrentJobsComboBox(WheelSafeComboBox):
+        """Dropdown with the spinbox-compatible methods used by resource tests."""
+        def value(self) -> int:
+            return int(self.currentData() or 1)
+
+        def setValue(self, value: int) -> None:
+            index = self.findData(max(1, min(8, int(value))))
+            self.setCurrentIndex(index if index >= 0 else 0)
 
     class DragDropVideoZone(QtWidgets.QFrame):
         """Large drag-and-drop area accepting multiple video files or folders."""
@@ -356,6 +380,7 @@ if PYSIDE6_AVAILABLE:
             self.signals.job_updated.connect(self._on_job_updated_ui)
             self.signals.queue_summary.connect(self._on_queue_summary_ui)
             self.signals.job_completed.connect(self._on_job_completed_ui)
+            self.signals.history_error.connect(self._on_history_error_ui)
             self.signals.preview_ready.connect(self._on_thumbnail_ready)
             self.signals.import_ready.connect(self._on_import_ready)
             self._import_busy = False
@@ -373,12 +398,14 @@ if PYSIDE6_AVAILABLE:
             if self.controller.queue_manager:
                 self.controller.queue_manager.on_job_updated = self.signals.job_updated.emit
                 self.controller.queue_manager.on_queue_summary = self.signals.queue_summary.emit
-                self.controller.queue_manager.on_job_completed = self.signals.job_completed.emit
+                self.controller.queue_manager.on_job_completed = self._persist_and_relay_completed
 
             self.setMinimumSize(1020, 690)
             self.preset_cards: dict[PresetId, PresetCardWidget] = {}
             self.nav_buttons: list[QtWidgets.QPushButton] = []
 
+            self._theme_css_cache = {name: build_stylesheet(name) for name in ("dark", "light")}
+            self._applied_theme = None
             self._build_ui()
             decorate_main_window(self)
             self.apply_theme(self.controller.settings.theme)
@@ -455,7 +482,7 @@ if PYSIDE6_AVAILABLE:
             side_v.addStretch(1)
 
             # Language & Theme quick selectors
-            self.lang_combo = QtWidgets.QComboBox()
+            self.lang_combo = WheelSafeComboBox()
             self.lang_combo.addItem("ไทย (Thai)", "th")
             self.lang_combo.addItem("English", "en")
             self.lang_combo.setCurrentIndex(
@@ -622,17 +649,22 @@ if PYSIDE6_AVAILABLE:
             self.encoding_details_label.setObjectName("SubheadingLabel")
             self.encoding_details_label.setWordWrap(True)
             v.addWidget(self.encoding_details_label)
+            self.chk_max_two_pass = QtWidgets.QCheckBox()
+            self.chk_max_two_pass.setChecked(self.controller.advanced_options.max_saving_two_pass)
+            self.chk_max_two_pass.toggled.connect(self._sync_advanced_options)
+            self.chk_max_two_pass.toggled.connect(self._refresh_encoding_details)
+            v.addWidget(self.chk_max_two_pass)
 
             # Custom Target Size Bar (Preset E)
             self.target_size_frame = QtWidgets.QFrame()
             self.target_size_frame.setObjectName("CardFrame")
             ts_row = QtWidgets.QHBoxLayout(self.target_size_frame)
             self.target_size_label = QtWidgets.QLabel()
-            self.target_size_spin = QtWidgets.QDoubleSpinBox()
+            self.target_size_spin = WheelSafeDoubleSpinBox()
             self.target_size_spin.setRange(1.0, 50_000.0)
             self.target_size_spin.setValue(self.controller.target_size_mb)
             self.target_size_spin.valueChanged.connect(self._on_target_size_changed)
-            self.target_unit_combo = QtWidgets.QComboBox()
+            self.target_unit_combo = WheelSafeComboBox()
             self.target_unit_combo.addItems(["MB", "GB"])
             self.target_unit_combo.currentIndexChanged.connect(self._on_target_size_changed)
             self.target_plan_status = QtWidgets.QLabel()
@@ -653,20 +685,20 @@ if PYSIDE6_AVAILABLE:
             b_layout.setSpacing(12)
 
             self.lbl_compat = QtWidgets.QLabel()
-            self.compat_combo = QtWidgets.QComboBox()
+            self.compat_combo = WheelSafeComboBox()
             self.compat_combo.addItem("", CompatibilityMode.MODERN_ANDROID.value)
             self.compat_combo.addItem("", CompatibilityMode.MAX_COMPATIBILITY.value)
             self.compat_combo.currentIndexChanged.connect(self._on_compat_changed)
 
             self.lbl_format = QtWidgets.QLabel()
-            self.format_combo = QtWidgets.QComboBox()
+            self.format_combo = WheelSafeComboBox()
             for fmt in ["mp4", "mkv", "mov", "webm", "avi"]:
                 self.format_combo.addItem(fmt.upper(), fmt)
             self.format_combo.currentIndexChanged.connect(self._on_format_changed)
 
 
             self.operation_label = QtWidgets.QLabel()
-            self.operation_combo = QtWidgets.QComboBox()
+            self.operation_combo = WheelSafeComboBox()
             self.operation_combo.addItem("", "compress")
             self.operation_combo.addItem("", "convert")
             self.operation_combo.addItem("", "both")
@@ -685,7 +717,7 @@ if PYSIDE6_AVAILABLE:
             # Independent still-image format/quality controls work in mixed
             # batches without changing the selected VIDEO preset.
             self.lbl_image_format = QtWidgets.QLabel()
-            self.image_format_combo = QtWidgets.QComboBox()
+            self.image_format_combo = WheelSafeComboBox()
             for ext in IMAGE_OUTPUT_FORMATS:
                 self.image_format_combo.addItem(ext.upper(), ext)
             self.image_format_combo.setCurrentIndex(
@@ -694,7 +726,7 @@ if PYSIDE6_AVAILABLE:
             self.image_format_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
 
             self.lbl_image_preset = QtWidgets.QLabel()
-            self.image_preset_combo = QtWidgets.QComboBox()
+            self.image_preset_combo = WheelSafeComboBox()
             for profile in ImagePreset:
                 self.image_preset_combo.addItem("", profile.value)
             self.image_preset_combo.setCurrentIndex(
@@ -702,7 +734,7 @@ if PYSIDE6_AVAILABLE:
             )
             self.image_preset_combo.currentIndexChanged.connect(self._on_output_preferences_changed)
             self.lbl_image_quality = QtWidgets.QLabel()
-            self.image_quality_spin = QtWidgets.QSpinBox()
+            self.image_quality_spin = WheelSafeSpinBox()
             self.image_quality_spin.setRange(1, 100)
             self.image_quality_spin.setValue(self.controller.image_quality)
             self.image_quality_spin.valueChanged.connect(self._on_output_preferences_changed)
@@ -712,7 +744,7 @@ if PYSIDE6_AVAILABLE:
             self.suffix_edit.setMaxLength(48)
             self.suffix_edit.editingFinished.connect(self._on_output_preferences_changed)
             self.lbl_collision = QtWidgets.QLabel()
-            self.output_policy_combo = QtWidgets.QComboBox()
+            self.output_policy_combo = WheelSafeComboBox()
             for policy in OutputPolicy:
                 self.output_policy_combo.addItem("", policy.value)
             self.output_policy_combo.setCurrentIndex(
@@ -723,7 +755,7 @@ if PYSIDE6_AVAILABLE:
             self.skip_larger_check.setChecked(self.controller.settings.skip_larger_outputs)
             self.skip_larger_check.toggled.connect(self._on_output_preferences_changed)
             self.lbl_after = QtWidgets.QLabel()
-            self.after_action_combo = QtWidgets.QComboBox()
+            self.after_action_combo = WheelSafeComboBox()
             for action in AfterExportAction:
                 self.after_action_combo.addItem("", action.value)
             self.after_action_combo.setCurrentIndex(
@@ -813,7 +845,7 @@ if PYSIDE6_AVAILABLE:
             self.chk_adv_override = QtWidgets.QCheckBox("Enable Manual Encoder Overrides")
             self.chk_adv_override.toggled.connect(self._sync_advanced_options)
 
-            self.adv_encoder_combo = QtWidgets.QComboBox()
+            self.adv_encoder_combo = WheelSafeComboBox()
             for enc in ["", "libx265", "libx264", "libvpx-vp9", "libsvtav1",
                         "hevc_nvenc", "h264_nvenc", "hevc_qsv", "h264_qsv",
                         "hevc_amf", "h264_amf", "hevc_videotoolbox",
@@ -821,18 +853,18 @@ if PYSIDE6_AVAILABLE:
                 self.adv_encoder_combo.addItem(enc or "Auto (Preset Default)", enc)
             self.adv_encoder_combo.currentIndexChanged.connect(self._sync_advanced_options)
 
-            self.adv_crf_spin = QtWidgets.QSpinBox()
+            self.adv_crf_spin = WheelSafeSpinBox()
             self.adv_crf_spin.setRange(0, 51)
             self.adv_crf_spin.setValue(24)
             self.adv_crf_spin.valueChanged.connect(self._sync_advanced_options)
 
-            self.adv_preset_combo = QtWidgets.QComboBox()
+            self.adv_preset_combo = WheelSafeComboBox()
             for sp in ["ultrafast", "veryfast", "fast", "medium", "slow", "veryslow"]:
                 self.adv_preset_combo.addItem(sp, sp)
             self.adv_preset_combo.setCurrentText("medium")
             self.adv_preset_combo.currentIndexChanged.connect(self._sync_advanced_options)
 
-            self.adv_audio_combo = QtWidgets.QComboBox()
+            self.adv_audio_combo = WheelSafeComboBox()
             for ac in ["copy", "aac", "libopus", "mp3"]:
                 self.adv_audio_combo.addItem(ac, ac)
             self.adv_audio_combo.currentIndexChanged.connect(self._sync_advanced_options)
@@ -911,6 +943,10 @@ if PYSIDE6_AVAILABLE:
             self.btn_cancel_job = QtWidgets.QPushButton()
             self.btn_cancel_all = QtWidgets.QPushButton()
             self.btn_retry_failed = QtWidgets.QPushButton()
+            self.btn_clear_queue_history = QtWidgets.QPushButton()
+            self.btn_delete_all_originals = QtWidgets.QPushButton()
+            self.btn_clear_queue_history.clicked.connect(self._clear_queue_history)
+            self.btn_delete_all_originals.clicked.connect(self._trash_all_originals)
 
             self.btn_pause_job.clicked.connect(self._pause_selected_job)
             self.btn_resume_job.clicked.connect(self._resume_selected_job)
@@ -933,6 +969,8 @@ if PYSIDE6_AVAILABLE:
             self.queue_columns_menu = QtWidgets.QMenu(self.queue_columns_btn)
             self.queue_columns_btn.setMenu(self.queue_columns_menu)
             ctrl_row.addWidget(self.queue_columns_btn, 1, 2)
+            ctrl_row.addWidget(self.btn_clear_queue_history, 2, 0)
+            ctrl_row.addWidget(self.btn_delete_all_originals, 2, 1, 1, 2)
             v.addLayout(ctrl_row)
 
             self.queue_table = QtWidgets.QTableWidget(0, 11)
@@ -1025,6 +1063,9 @@ if PYSIDE6_AVAILABLE:
             assign(self.btn_history_refresh, "retry")
             self.btn_history_refresh.clicked.connect(self._refresh_history_table)
             head.addWidget(self.btn_history_refresh)
+            self.btn_clear_visible_history = QtWidgets.QPushButton()
+            self.btn_clear_visible_history.clicked.connect(self._clear_visible_history)
+            head.addWidget(self.btn_clear_visible_history)
             v.addLayout(head)
 
             self.history_summary_card = QtWidgets.QFrame()
@@ -1106,7 +1147,7 @@ if PYSIDE6_AVAILABLE:
             grid.setContentsMargins(18, 16, 18, 16)
             grid.setSpacing(12)
 
-            self.res_mode_combo = QtWidgets.QComboBox()
+            self.res_mode_combo = WheelSafeComboBox()
             self.res_mode_combo.addItem("Light", ResourceMode.LIGHT.value)
             self.res_mode_combo.addItem("Balanced", ResourceMode.BALANCED.value)
             self.res_mode_combo.addItem("Maximum", ResourceMode.MAXIMUM.value)
@@ -1114,12 +1155,12 @@ if PYSIDE6_AVAILABLE:
             self.res_mode_combo.currentIndexChanged.connect(self._on_resource_mode_changed)
 
 
-            self.cpu_cap_combo = QtWidgets.QComboBox()
+            self.cpu_cap_combo = WheelSafeComboBox()
             self.cpu_cap_presets = (10, 20, 30, 40, 50, 60, 70, 75, 80, 85, 90, 95, 100)
             for cap in self.cpu_cap_presets:
                 self.cpu_cap_combo.addItem(f"{cap}%", cap)
             self.cpu_cap_combo.addItem("กำหนดเอง… / Custom…", "custom")
-            self.cpu_custom_spin = QtWidgets.QSpinBox()
+            self.cpu_custom_spin = WheelSafeSpinBox()
             self.cpu_custom_spin.setRange(10, 100)
             self.cpu_custom_spin.setSuffix("%")
             self.cpu_custom_spin.setSingleStep(1)
@@ -1133,7 +1174,7 @@ if PYSIDE6_AVAILABLE:
             self.cpu_cap_combo.currentIndexChanged.connect(self._on_cpu_cap_choice_changed)
             self.cpu_custom_spin.valueChanged.connect(self._on_resource_controls_edited)
 
-            self.threads_spin = QtWidgets.QSpinBox()
+            self.threads_spin = WheelSafeSpinBox()
             self.threads_spin.setRange(0, 64)
             self.threads_spin.setValue(self.controller.resource_limits.cpu_threads)
             self.threads_spin.valueChanged.connect(self._on_resource_controls_edited)
@@ -1145,15 +1186,16 @@ if PYSIDE6_AVAILABLE:
             self.lbl_threads_help.setObjectName("MutedLabel")
             self.lbl_threads_help.setWordWrap(True)
 
-            self.concurrent_spin = QtWidgets.QSpinBox()
-            self.concurrent_spin.setRange(1, 4)
+            self.concurrent_spin = ConcurrentJobsComboBox()
+            for count in range(1, 9):
+                self.concurrent_spin.addItem(str(count), count)
             self.concurrent_spin.setValue(self.controller.resource_limits.max_concurrent_jobs)
-            self.concurrent_spin.valueChanged.connect(self._on_resource_controls_edited)
+            self.concurrent_spin.currentIndexChanged.connect(self._on_resource_controls_edited)
 
             self.chk_gpu_enable = QtWidgets.QCheckBox("Enable GPU Hardware Encoding when supported")
             self.chk_gpu_enable.setChecked(self.controller.resource_limits.enable_gpu_encoding)
             self.chk_gpu_enable.toggled.connect(self._on_resource_controls_edited)
-            self.gpu_backend_combo = QtWidgets.QComboBox()
+            self.gpu_backend_combo = WheelSafeComboBox()
             for label, backend in (
                 ("Auto • detect working GPU", "auto"),
                 ("NVIDIA NVENC", "nvenc"),
@@ -1220,8 +1262,15 @@ if PYSIDE6_AVAILABLE:
             return page
 
         def apply_theme(self, theme_name: str) -> None:
+            if getattr(self, "_applied_theme", None) == theme_name:
+                return
             self.controller.set_theme(theme_name)
-            self.setStyleSheet(build_stylesheet(theme_name))
+            self.setUpdatesEnabled(False)
+            try:
+                self.setStyleSheet(self._theme_css_cache[theme_name])
+                self._applied_theme = theme_name
+            finally:
+                self.setUpdatesEnabled(True)
 
         def retranslate_ui(self) -> None:
             t = self.controller.translator.t
@@ -1341,6 +1390,16 @@ if PYSIDE6_AVAILABLE:
             self.btn_start_compress.setText(t("btn_start_compress"))
             self._on_operation_changed()
             self.btn_toggle_advanced.setText(t("advanced_toggle"))
+            self.chk_max_two_pass.setText(
+                "เปิด 2-Pass (ช้าลง • ตั้งเป้าบิตเรตวิดีโอประมาณครึ่งหนึ่งของต้นฉบับ)"
+                if self.controller.translator.language == "th"
+                else "Enable 2-Pass (slower • targets ~50% of source video bitrate)"
+            )
+            self.chk_max_two_pass.setToolTip(
+                "2-Pass ใช้การควบคุมบิตเรต ไม่ใช่ CRF • ขนาดจริงและคุณภาพขึ้นอยู่กับไฟล์"
+                if self.controller.translator.language == "th"
+                else "Switches from CRF to bitrate-based 2-pass. Size and quality vary by content."
+            )
 
             self.convert_title.setText(t("nav_convert"))
 
@@ -1364,6 +1423,14 @@ if PYSIDE6_AVAILABLE:
             self.btn_cancel_job.setText(t("queue_cancel"))
             self.btn_cancel_all.setText(t("queue_cancel_all"))
             self.btn_retry_failed.setText(t("queue_retry_failed"))
+            self.btn_clear_queue_history.setText(
+                "ล้างงานที่จบแล้ว" if self.controller.translator.language == "th"
+                else "Clear Finished Jobs"
+            )
+            self.btn_delete_all_originals.setText(
+                "ย้ายต้นฉบับทั้งหมดลงถังขยะ" if self.controller.translator.language == "th"
+                else "Move All Originals to Trash"
+            )
 
             self.history_title.setText(t("comparison_header"))
             self.history_summary_heading.setText(t("history_lifetime_title"))
@@ -1372,6 +1439,10 @@ if PYSIDE6_AVAILABLE:
             self.btn_copy_history.setText(t("history_copy_text"))
             self.btn_copy_history_image.setText(t("history_copy_image"))
             self.btn_history_refresh.setText(t("history_refresh"))
+            self.btn_clear_visible_history.setText(
+                "ล้างประวัติ" if self.controller.translator.language == "th"
+                else "Clear History"
+            )
             self.history_table.setHorizontalHeaderLabels([
                 t("queue_file"), t("comparison_original"), t("comparison_compressed"),
                 t("comparison_saved"), t("comparison_reduction"),
@@ -1412,7 +1483,12 @@ if PYSIDE6_AVAILABLE:
         def _toggle_theme(self) -> None:
             next_theme = "light" if self.controller.settings.theme == "dark" else "dark"
             self.apply_theme(next_theme)
-            self.retranslate_ui()
+            self.theme_btn.setText(self.controller.translator.t(
+                "theme_light" if next_theme == "dark" else "theme_dark"
+            ))
+            # Do NOT retranslate/scan up to 2,000 historical file paths just to
+            # switch colors (USB/network stat() can block the GUI thread).
+            self._restyle_history_summary()
 
 
         def _on_preset_selected(self, preset_id: PresetId, *, from_preferences: bool = False) -> None:
@@ -1429,6 +1505,7 @@ if PYSIDE6_AVAILABLE:
             for pid, card in self.preset_cards.items():
                 card.set_selected(pid == preset_id)
             self.target_size_frame.setVisible(preset_id == PresetId.CUSTOM_SIZE)
+            self.chk_max_two_pass.setVisible(preset_id == PresetId.MAX_SPACE_SAVING)
             self._refresh_selection_summary()
 
 
@@ -1462,6 +1539,9 @@ if PYSIDE6_AVAILABLE:
             p = PRESET_CATALOG[self.controller.active_preset]
             if p.uses_two_pass:
                 detail = f"2-Pass • Target {self.controller.target_size_mb:g} MB • size not exact"
+            elif (p.preset_id == PresetId.MAX_SPACE_SAVING
+                  and self.chk_max_two_pass.isChecked()):
+                detail = "2-Pass • ~50% source video bitrate target • slower; size/quality vary"
             else:
                 crf = (p.default_crf_h265 if self.controller.compatibility_mode ==
                        CompatibilityMode.MODERN_ANDROID else p.default_crf_h264)
@@ -1551,6 +1631,7 @@ if PYSIDE6_AVAILABLE:
             adv.crf = int(self.adv_crf_spin.value())
             adv.encoder_speed_preset = str(self.adv_preset_combo.currentData() or "medium")
             adv.audio_codec = str(self.adv_audio_combo.currentData() or "copy")
+            adv.max_saving_two_pass = self.chk_max_two_pass.isChecked()
 
         def _on_paths_dropped(self, paths: list[str]) -> None:
             """Never run ffprobe or image decoding on the Qt event thread."""
@@ -1956,7 +2037,7 @@ if PYSIDE6_AVAILABLE:
                 result_item.setText(
                     f"{format_bytes(result.original_size_bytes)} → "
                     f"{format_bytes(result.output_size_bytes)} "
-                    f"({result.reduction_percent:+.1f}%)"
+                    f"(≈{100 * result.output_size_bytes / max(1, result.original_size_bytes):.1f}% remaining)"
                 )
             elif item.error_message:
                 result_item.setText(item.error_message)
@@ -1982,6 +2063,8 @@ if PYSIDE6_AVAILABLE:
             action_signature = (
                 item.status.value,
                 str(item.result.output_path) if item.result else "",
+                bool((item.result.source_backup_path or item.result.input_path).is_file())
+                if item.result else False,
             )
             if current_widget and current_widget.property("actionSignature") == action_signature:
                 return
@@ -2038,6 +2121,18 @@ if PYSIDE6_AVAILABLE:
             if item.result:
                 compare_action.triggered.connect(
                     lambda _checked=False, r=item.result: self._show_completed_compare(r)
+                )
+            if item.status == JobStatus.COMPLETED and item.result:
+                menu.addSeparator()
+                delete_action = menu.addAction(
+                    "ย้ายต้นฉบับลงถังขยะ" if th else "Move Original to Trash"
+                )
+                try:
+                    self._verified_trash_candidate(item)
+                except (OSError, ValueError):
+                    delete_action.setEnabled(False)
+                delete_action.triggered.connect(
+                    lambda _checked=False, jid=item.spec.job_id: self._trash_original_job(jid)
                 )
             if item.status in (JobStatus.CANCELLED, JobStatus.FAILED):
                 menu.addSeparator()
@@ -2192,8 +2287,35 @@ if PYSIDE6_AVAILABLE:
                 except (OSError, PermissionError, RuntimeError) as exc:
                     QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
 
+        def _persist_and_relay_completed(self, result: JobResultComparison) -> None:
+            # Preserve the controller persistence callback; a previous UI signal
+            # assignment silently replaced it and broke ALL lifetime statistics.
+            try:
+                self.controller._on_job_completed(result)
+            except Exception as exc:
+                self.signals.history_error.emit(str(exc))
+            self.signals.job_completed.emit(result)
+
+        def _on_history_error_ui(self, error: str) -> None:
+            QtWidgets.QMessageBox.warning(
+                self, "PocketVideo",
+                "Export completed, but savings history could not be saved: " + error,
+            )
+
         def _on_job_completed_ui(self, _comparison: JobResultComparison) -> None:
             self._refresh_history_table()
+
+        def _restyle_history_summary(self) -> None:
+            saved = getattr(self, "_last_saved_bytes", 0)
+            palette = self._history_palette()
+            color = (palette.success if saved > 0 else
+                     palette.danger if saved < 0 else palette.text_primary)
+            self.history_total_value.setStyleSheet(
+                f"font-size: 29px; font-weight: 700; color: {color};"
+            )
+            self.history_ratio_value.setStyleSheet(
+                f"font-weight: 600; color: {color};"
+            )
 
         def _history_saved_label(self, value: int) -> str:
             return ("-" if value < 0 else "") + format_bytes(abs(value))
@@ -2206,6 +2328,7 @@ if PYSIDE6_AVAILABLE:
             t = self.controller.translator.t
             stats = self.controller.settings_mgr.load_savings_stats()
             saved = stats.net_saved_bytes
+            self._last_saved_bytes = saved
             palette = self._history_palette()
             indicator = (
                 palette.success if saved > 0 else
@@ -2248,7 +2371,7 @@ if PYSIDE6_AVAILABLE:
                     format_bytes(entry.original_size_bytes),
                     format_bytes(entry.output_size_bytes),
                     self._history_saved_label(entry.space_saved_bytes),
-                    f"{entry.reduction_percent:+.1f}%",
+                    f"≈{100 * entry.output_size_bytes / max(1, entry.original_size_bytes):.1f}%",
                     f"{entry.original_resolution} → {entry.output_resolution}",
                     f"{entry.original_codec} → {entry.output_codec}",
                     state,
@@ -2347,6 +2470,174 @@ if PYSIDE6_AVAILABLE:
             finally:
                 painter.end()
             QtGui.QGuiApplication.clipboard().setPixmap(img)
+
+        def _clear_queue_history(self) -> None:
+            manager = self.controller.queue_manager
+            if manager is None:
+                return
+            finished = [x for x in manager.items() if x.status in (
+                JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED
+            )]
+            if not finished:
+                return
+            th = self.controller.translator.language == "th"
+            message = (
+                f"ล้างรายการที่จบแล้ว {len(finished)} งานออกจากคิว?\n"
+                "ไม่ลบไฟล์หรือสถิติสะสม"
+                if th else
+                f"Clear {len(finished)} finished queue entries?\n"
+                "Files and lifetime statistics will be kept."
+            )
+            if QtWidgets.QMessageBox.question(
+                self, "PocketVideo", message,
+                QtWidgets.QMessageBox.StandardButton.Yes |
+                QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            manager.clear_finished()
+            self.queue_table.setRowCount(0)
+            for item in manager.items():
+                self._on_job_updated_ui(item)
+
+        def _clear_visible_history(self) -> None:
+            th = self.controller.translator.language == "th"
+            message = (
+                "ล้างรายการประวัติทั้งหมด? สถิติสะสมจะยังอยู่ แต่รายการเก่าจะกู้จากแอปไม่ได้"
+                if th else
+                "Clear visible history? Lifetime totals remain, but old history rows cannot be recovered in the app."
+            )
+            if QtWidgets.QMessageBox.question(
+                self, "PocketVideo", message,
+                QtWidgets.QMessageBox.StandardButton.Yes |
+                QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            try:
+                self.controller.settings_mgr.clear_history()
+            except OSError as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            self._refresh_history_table()
+
+        def _verified_trash_candidate(self, item: QueueItem) -> Path:
+            if item.result is None or item.status != JobStatus.COMPLETED:
+                raise ValueError("Only successfully verified exports can delete originals.")
+            path = verified_original_for_trash(
+                item.result, getattr(item.spec, "source_fingerprint", None),
+                getattr(item, "verified_output_fingerprint", None),
+            )
+            # Never remove a file still being read as input or required as
+            # another output in this queue.
+            manager = self.controller.queue_manager
+            if manager is not None:
+                for other in manager.items():
+                    if other.spec.job_id == item.spec.job_id:
+                        continue
+                    if (other.status not in (
+                        JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED
+                    ) and other.spec.input_path.resolve() == path.resolve()):
+                        raise ValueError("Another active or pending job uses this original.")
+                    if (other.status == JobStatus.COMPLETED and other.result
+                            and other.result.output_path.resolve() == path.resolve()):
+                        raise ValueError("This original is also an exported result of another job.")
+            return path
+
+        def _trash_original_job(self, job_id: str) -> None:
+            manager = self.controller.queue_manager
+            item = manager.get_item(job_id) if manager else None
+            if not item or item.status != JobStatus.COMPLETED or not item.result:
+                return
+            try:
+                original = self._verified_trash_candidate(item)
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            th = self.controller.translator.language == "th"
+            message = (
+                f"ย้ายต้นฉบับลงถังขยะ?\n{original}\n"
+                f"ผลลัพธ์ที่ตรวจแล้ว: {item.result.output_path}\nล้างถังขยะจึงจะได้พื้นที่ว่างคืน"
+                if th else
+                f"Move this original to the OS Trash/Recycle Bin?\n{original}\n"
+                f"Verified output: {item.result.output_path}\nEmpty the Trash to reclaim disk space."
+            )
+            if QtWidgets.QMessageBox.question(
+                self, "PocketVideo", message,
+                QtWidgets.QMessageBox.StandardButton.Yes |
+                QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            try:
+                self._verified_trash_candidate(item)
+                if not QtCore.QFile.moveToTrash(str(original)):
+                    raise OSError("Could not move original to Trash. File was kept.")
+            except (ValueError, OSError) as exc:
+                QtWidgets.QMessageBox.warning(self, "PocketVideo", str(exc))
+                return
+            self._on_job_updated_ui(item)
+            self._refresh_history_table()
+
+        def _trash_all_originals(self) -> None:
+            manager = self.controller.queue_manager
+            if manager is None:
+                return
+            eligible = []
+            seen = set()
+            for item in manager.items():
+                if item.status != JobStatus.COMPLETED or item.result is None:
+                    continue
+                try:
+                    path = self._verified_trash_candidate(item)
+                except (OSError, ValueError):
+                    continue
+                key = str(path.resolve()).casefold()
+                if key not in seen:
+                    seen.add(key)
+                    eligible.append((item, path))
+            th = self.controller.translator.language == "th"
+            if not eligible:
+                QtWidgets.QMessageBox.information(
+                    self, "PocketVideo",
+                    "ไม่มีต้นฉบับที่ลบได้อย่างปลอดภัย"
+                    if th else "No safely verified originals available.",
+                )
+                return
+            size = sum(path.stat().st_size for _item, path in eligible)
+            message = (
+                f"ย้าย {len(eligible)} ไฟล์ลงถังขยะ?\n"
+                f"ขนาดต้นฉบับรวม: {format_bytes(size)}\n"
+                "ไฟล์ที่ล้มเหลวจะไม่ถูกแตะต้อง • ล้างถังขยะจึงจะคืนพื้นที่ว่าง"
+                if th else
+                f"Move {len(eligible)} originals to OS Trash/Recycle Bin?\n"
+                f"Total original size: {format_bytes(size)}\n"
+                "Failed/unverified exports will not be touched. Empty Trash to reclaim space."
+            )
+            if QtWidgets.QMessageBox.question(
+                self, "PocketVideo", message,
+                QtWidgets.QMessageBox.StandardButton.Yes |
+                QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            removed = 0
+            errors = []
+            for item, path in eligible:
+                try:
+                    self._verified_trash_candidate(item)
+                    if not QtCore.QFile.moveToTrash(str(path)):
+                        raise OSError("OS Trash rejected file")
+                    removed += 1
+                    self._on_job_updated_ui(item)
+                except (ValueError, OSError) as exc:
+                    errors.append(f"{path.name}: {exc}")
+            self._refresh_history_table()
+            QtWidgets.QMessageBox.information(
+                self, "PocketVideo",
+                f"{removed}/{len(eligible)} originals moved to Trash.\n"
+                + ("\n".join(errors[:8]) if errors else ""),
+            )
 
         def _selected_job_id(self) -> Optional[str]:
             row = self.queue_table.currentRow()

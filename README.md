@@ -171,6 +171,16 @@ PocketVideo is free and open-source software licensed under the **GNU General Pu
 - Binary redistribution and physical end-user Mac tests remain explicit go/no-go gates. See `docs/MACOS_DISTRIBUTION.md`.
 
 
+## v1.3.3 — Compression Review (development)
+
+This update fixes the completion callback bug that previously prevented saving some successful exports. Lifetime stats now persist across cleared history and removed originals. Previously unsaved jobs cannot be reconstructed without additional evidence.
+
+In History/Queue, the percentage now means **output size remaining** (≈20% when the compressed file is one fifth of the source). In Maximum Space Saving the optional **2-Pass** checkbox switches from CRF to a bitrate target near half the source video bitrate; it may be slower and size/quality are not guaranteed.
+
+Finished verified exports gain per-file and bulk **Move Original to OS Trash/Recycle Bin** actions with explicit confirmation and identity safety checks. They do not auto-delete, and emptying Trash is required to reclaim free disk space. Clear Finished Jobs affects queue entries only; Clear History removes visible history only. Concurrent Jobs supports **1–8**, settings ignore accidental mouse-wheel changes, and Light Mode highlights the active preset.
+
+Windows Date Created is restored where supported; access/modified times are copied where filesystems permit. Timestamp failures are displayed as warnings instead of losing completed exports.
+
 ## v1.3.2 — Custom CPU limits and lifetime savings (development)
 - Windows **CPU Hard Cap** now offers 10%, 20%, 30%, 40%, 50%, 60%, 70%, 75%, 80%, 85%, 90%, 95%, 100% plus **Custom 10–100%** (increments of 1%). The exact choice is saved and restored. macOS shows the control as unavailable because Windows Job Objects do not exist there.
 - **FFmpeg Thread Count** has in-app help: `0 = Auto` is recommended; 4 threads requests a codec's worker threads, **not 4% CPU**, and an encoder may use other internal threads.
