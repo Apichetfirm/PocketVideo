@@ -1,5 +1,10 @@
 # PocketVideo Release Notes
 
+## v1.3.4 — Windows HEVC 2-Pass Hotfix (development, not public release)
+- Fixed Maximum Space Saving + 2-Pass with libx265 on Windows: use FFmpeg `-pass` and `-passlogfile` instead of embedding a `C:` absolute stats path inside colon-delimited `-x265-params`.
+- Added regression coverage for Windows paths/spaces, genuine HEVC pass 1+2 with audio and primary-video-only mapping that ignores DJI proprietary data tracks.
+- No codec-distribution or notarization approval implied; users must install the new Windows build to receive this fix.
+
 ## v1.3.3 — Compression Review & Safety (development, not public release)
 - Fixed GUI completion callback overwriting the durable history callback: verified exports now save before/after size snapshots and lifetime totals. Earlier jobs never recorded cannot be recovered automatically.
 - Optional genuine 2-pass bitrate encoding in Maximum Space Saving (slower; size/quality vary). Existing custom-size two-pass remains.
