@@ -2525,8 +2525,8 @@ if PYSIDE6_AVAILABLE:
             if item.result is None or item.status != JobStatus.COMPLETED:
                 raise ValueError("Only successfully verified exports can delete originals.")
             path = verified_original_for_trash(
-                item.result, item.spec.source_fingerprint,
-                item.verified_output_fingerprint,
+                item.result, getattr(item.spec, "source_fingerprint", None),
+                getattr(item, "verified_output_fingerprint", None),
             )
             # Never remove a file still being read as input or required as
             # another output in this queue.
