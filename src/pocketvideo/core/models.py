@@ -224,6 +224,7 @@ class AdvancedEncodingOptions:
     audio_codec: Optional[str] = None        # "copy", "aac", "libopus", "mp3"
     audio_bitrate_kbps: Optional[int] = None
     force_two_pass: bool = False
+    max_saving_two_pass: bool = False  # opt-in bitrate-based pass in maximum-saving mode
     preserve_metadata: bool = True
     preserve_subtitles: bool = True
 
