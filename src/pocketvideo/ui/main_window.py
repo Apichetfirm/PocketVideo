@@ -2482,10 +2482,10 @@ if PYSIDE6_AVAILABLE:
                 return
             th = self.controller.translator.language == "th"
             message = (
-                f"ล้างรายการที่จบแล้ว {len(finished)} งานออกจากคิว?\\n"
+                f"ล้างรายการที่จบแล้ว {len(finished)} งานออกจากคิว?\n"
                 "ไม่ลบไฟล์หรือสถิติสะสม"
                 if th else
-                f"Clear {len(finished)} finished queue entries?\\n"
+                f"Clear {len(finished)} finished queue entries?\n"
                 "Files and lifetime statistics will be kept."
             )
             if QtWidgets.QMessageBox.question(
@@ -2556,11 +2556,11 @@ if PYSIDE6_AVAILABLE:
                 return
             th = self.controller.translator.language == "th"
             message = (
-                f"ย้ายต้นฉบับลงถังขยะ?\\n{original}\\n"
-                f"ผลลัพธ์ที่ตรวจแล้ว: {item.result.output_path}\\nล้างถังขยะจึงจะได้พื้นที่ว่างคืน"
+                f"ย้ายต้นฉบับลงถังขยะ?\n{original}\n"
+                f"ผลลัพธ์ที่ตรวจแล้ว: {item.result.output_path}\nล้างถังขยะจึงจะได้พื้นที่ว่างคืน"
                 if th else
-                f"Move this original to the OS Trash/Recycle Bin?\\n{original}\\n"
-                f"Verified output: {item.result.output_path}\\nEmpty the Trash to reclaim disk space."
+                f"Move this original to the OS Trash/Recycle Bin?\n{original}\n"
+                f"Verified output: {item.result.output_path}\nEmpty the Trash to reclaim disk space."
             )
             if QtWidgets.QMessageBox.question(
                 self, "PocketVideo", message,
@@ -2606,12 +2606,12 @@ if PYSIDE6_AVAILABLE:
                 return
             size = sum(path.stat().st_size for _item, path in eligible)
             message = (
-                f"ย้าย {len(eligible)} ไฟล์ลงถังขยะ?\\n"
-                f"ขนาดต้นฉบับรวม: {format_bytes(size)}\\n"
+                f"ย้าย {len(eligible)} ไฟล์ลงถังขยะ?\n"
+                f"ขนาดต้นฉบับรวม: {format_bytes(size)}\n"
                 "ไฟล์ที่ล้มเหลวจะไม่ถูกแตะต้อง • ล้างถังขยะจึงจะคืนพื้นที่ว่าง"
                 if th else
-                f"Move {len(eligible)} originals to OS Trash/Recycle Bin?\\n"
-                f"Total original size: {format_bytes(size)}\\n"
+                f"Move {len(eligible)} originals to OS Trash/Recycle Bin?\n"
+                f"Total original size: {format_bytes(size)}\n"
                 "Failed/unverified exports will not be touched. Empty Trash to reclaim space."
             )
             if QtWidgets.QMessageBox.question(
@@ -2635,8 +2635,8 @@ if PYSIDE6_AVAILABLE:
             self._refresh_history_table()
             QtWidgets.QMessageBox.information(
                 self, "PocketVideo",
-                f"{removed}/{len(eligible)} originals moved to Trash.\\n"
-                + ("\\n".join(errors[:8]) if errors else ""),
+                f"{removed}/{len(eligible)} originals moved to Trash.\n"
+                + ("\n".join(errors[:8]) if errors else ""),
             )
 
         def _selected_job_id(self) -> Optional[str]:

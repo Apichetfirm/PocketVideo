@@ -60,5 +60,5 @@ codesign --verify --deep --strict --verbose=2 dist/PocketVideo.app
 mkdir -p dist/macos-alpha
 MACHINE_ARCH="$(uname -m)"
 ditto -c -k --sequesterRsrc --keepParent dist/PocketVideo.app \
-  "dist/macos-alpha/PocketVideo-1.3.2-macos-${MACHINE_ARCH}-alpha.zip"
+  "dist/macos-alpha/PocketVideo-1.3.3-macos-${MACHINE_ARCH}-alpha.zip"
 shasum -a 256 dist/macos-alpha/*.zip > dist/macos-alpha/SHA256SUMS.txt

@@ -1,5 +1,18 @@
 # PocketVideo Release Notes
 
+## v1.3.3 — Compression Review & Safety (development, not public release)
+- Fixed GUI completion callback overwriting the durable history callback: verified exports now save before/after size snapshots and lifetime totals. Earlier jobs never recorded cannot be recovered automatically.
+- Optional genuine 2-pass bitrate encoding in Maximum Space Saving (slower; size/quality vary). Existing custom-size two-pass remains.
+- Copy original filesystem access/modified times, plus Windows creation time when available, for image and video exports. Timestamp copy errors are non-fatal warnings.
+- Mouse wheel cannot silently change selected settings. Concurrent Jobs dropdown now allows 1–8; resource consumption depends on machine and encoders.
+- Comparison shows **output size remaining (%)** (for example, ≈20%) rather than reduction; lifetime net savings still shows actual size difference, not free disk space.
+- Per-item and bulk opt-in **Move Original to OS Trash/Recycle Bin**, with confirmation, source/output fingerprint checks and protection for other active jobs. Empty Trash to reclaim actual storage; no automatic deletion.
+- Separate **Clear Finished Jobs** and **Clear History** controls. Neither deletes media or lifetime summary.
+- Improved selected preset visibility in light mode and cached theme switching that does not rescan inaccessible external drive history.
+- Extended FFmpeg/media, Qt UI, queue safety and timestamp regression tests for Windows/macOS CI.
+
+**Release gate:** v1.0.0 remains the last public GitHub Release until actual distributed binaries and codec compliance are approved.
+
 ## v1.3.2 — CPU Control & Shareable Savings (development)
 - 10–100% Windows CPU hard-cap menu with one-percent Custom value and
   persistent selection; explanatory FFmpeg Threads help (0=Auto).

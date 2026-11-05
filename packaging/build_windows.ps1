@@ -20,7 +20,7 @@ if ($VersionRun.ExitCode -ne 0) { throw "Built PocketVideo.exe failed its versio
 
 Write-Host "=== [5/6] Creating Portable ZIP Distribution ==="
 New-Item -ItemType Directory -Force -Path "$RepoRoot\dist\release" | Out-Null
-$PortableZip = "$RepoRoot\dist\release\PocketVideo-1.3.2-win64-portable.zip"
+$PortableZip = "$RepoRoot\dist\release\PocketVideo-1.3.3-win64-portable.zip"
 if (Test-Path $PortableZip) { Remove-Item $PortableZip }
 Compress-Archive -Path "$RepoRoot\dist\PocketVideo\*" -DestinationPath $PortableZip
 
@@ -36,11 +36,11 @@ if (-not $IsccPath) {
 }
 & $IsccPath "$RepoRoot\packaging\installer.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed to compile the installer." }
-$Installer = "$RepoRoot\dist\installer\PocketVideo-Setup-1.3.2-win64.exe"
+$Installer = "$RepoRoot\dist\installer\PocketVideo-Setup-1.3.3-win64.exe"
 if (-not (Test-Path $Installer)) { throw "Installer executable was not produced: $Installer" }
 Copy-Item $Installer "$RepoRoot\dist\release\" -Force
 
-foreach ($Package in @($PortableZip, "$RepoRoot\dist\release\PocketVideo-Setup-1.3.2-win64.exe")) {
+foreach ($Package in @($PortableZip, "$RepoRoot\dist\release\PocketVideo-Setup-1.3.3-win64.exe")) {
     if (-not (Test-Path $Package)) { throw "Required release package not found: $Package" }
     if ((Get-Item $Package).Length -le 0) { throw "Release package is empty: $Package" }
 }
