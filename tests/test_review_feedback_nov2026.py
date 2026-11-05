@@ -60,7 +60,7 @@ class CoreReviewRegressionTests(unittest.TestCase):
             expected_output = fingerprint(output)
             source.write_bytes(b"c" * 1100)
             with self.assertRaises(OSError):
-                verified_original_for_trash(result, expected)
+                verified_original_for_trash(result, expected, expected_output)
 
     def test_preserve_source_modification_time(self):
         with tempfile.TemporaryDirectory() as folder:
